@@ -29,7 +29,7 @@ di _n "=== Original observations: " _N " ===" _n
 ***********************************************
 
 * List of relevant variables to convert
-local numeric_vars "ils_dispy dwt dag"
+local numeric_vars "ils_dispy dwt dag ydses_o"
 
 foreach var of local numeric_vars {
     capture confirm variable `var'
@@ -48,57 +48,331 @@ foreach var of local numeric_vars {
 
 
 ****************************************
-* Calculate household disposable income
+* Calculate poverty threshold
 ****************************************
-di _n "=== STEP 1: Calculating total household disposable income ===" _n
 
-* Sum all individual incomes within each household
-bysort year scenario idhh: egen hh_ils_dispy_total = total(ils_dispy)
-label variable hh_ils_dispy_total "Total household disposable income"
+di _n "=== Calculating poverty thresholds ===" _n
 
-* Check calculation
-di "Total household income statistics:"
-sum hh_ils_dispy_total, detail
+* Initialize poverty threshold variable
+gen idpovline60 = .
+label variable idpovline60 "At-risk-of-poverty threshold (60% median)"
 
-***************************************************
-* Calculate equalized disposable household income
-***************************************************
-di _n "=== STEP 2a: Calculating equivalence scale ===" _n
+* Calculate threshold for each year and scenario combination
+foreach yr of local years {
+    foreach scen of local scenarios {
+        capture {
+            if `has_weights' {
+                quietly _pctile ydses_o [aw=dwt] if year == `yr' & scenario == "`scen'", p(50)
+            }
+            else {
+                quietly _pctile ydses_o if year == `yr' & scenario == "`scen'", p(50)
+            }
+            local median_yr = r(r1)
+            
+            quietly replace idpovline60 = 0.60 * `median_yr' if year == `yr' & scenario == "`scen'"
+            
+            di "Year `yr', Scenario `scen': Median = " %9.2f `median_yr' ", Threshold = " %9.2f (0.60 * `median_yr')
+        }
+    }
+}
 
-* Define adults
-gen adult = dag >= 14 if dag < . */ adults = 1 children = 0/*
+*===============================================================================
+* CALCULATE POVERTY INDICATORS
+*===============================================================================
 
-* Create age categories for equivalence scale
-gen eq_weight = .
-replace eq_weight = 0.3 if adult == 0  /*Children*/
-replace eq_weight = 0.5 if adult == 1  /*Adults (additional)*/
+di _n "=== Calculating poverty indicators ===" _n
 
-* Adjust weight for one adult in the household to 1.0 
-bysort year scenario idhh idperson (adult): gen first_adult = adult == 1 & _n == _N
+* At-risk-of-poverty
+gen poor = (ydses_o < idpovline60)
+label variable poor "At risk of poverty (1=yes)"
 
-replace eq_weight = 1 if first_adult == 1
+* Poverty gaps
+gen pov_gap_abs = idpovline60 - ydses_o if poor == 1
+label variable pov_gap_abs "Poverty gap absolute (Euro)"
 
-* Sum up equivalence weights per household
-bysort year scenario idhh: egen hh_eqfac = total(eq_weight)
-label variable hh_eqfac "Household equivalence factor (modified OECD)"
+gen pov_gap_rel = (idpovline60 - ydses_o) / idpovline60 if poor == 1
+label variable pov_gap_rel "Poverty gap relative (share)"
 
-* Check calculation
-di "Equivalence scale statistics:"
-sum hh_eqfac, detail
+* FGT indicators
+gen pov_gap_ratio = (idpovline60 - ydses_o) / idpovline60 if poor == 1
+replace pov_gap_ratio = 0 if poor == 0
+label variable pov_gap_ratio "FGT1 Poverty Gap Ratio"
 
-
-* Calculate equalized desposaple income
-
-gen eq_income = hh_ils_dispy_total / hh_eqfac
-
-label variable eq_income "Equivalised disposable income"
+gen pov_gap_sq = ((idpovline60 - ydses_o) / idpovline60)^2 if poor == 1
+replace pov_gap_sq = 0 if poor == 0
+label variable pov_gap_sq "FGT2 Squared Poverty Gap"
 
 
+*===============================================================================
+* CALCULATE RESULTS BY YEAR AND SCENARIO
+*===============================================================================
+
+di _n "=== Aggregating results by year and scenario ===" _n
+
+tempfile results
+local first = 1
+
+foreach yr of local years {
+    foreach scen of local scenarios {
+        
+        preserve
+        keep if year == `yr' & scenario == "`scen'"
+        
+        di _n "Processing: Year `yr', Scenario `scen' (N = " _N ")"
+        
+        if _N > 0 {
+            
+            capture {
+                * Headcount ratio
+                if `has_weights' {
+                    quietly sum poor [aw=dwt]
+                }
+                else {
+                    quietly sum poor
+                }
+                local poverty_rate = r(mean) * 100
+                local n_poor = r(sum)
+                
+                * Total number of households
+                if `has_weights' {
+                    quietly sum dwt
+                    local n_total = r(sum)
+                }
+                else {
+                    local n_total = _N
+                }
+                
+                * Average poverty gap (only for poor)
+                if `has_weights' {
+                    quietly sum pov_gap_abs [aw=dwt] if poor == 1
+                }
+                else {
+                    quietly sum pov_gap_abs if poor == 1
+                }
+                local avg_gap_abs = r(mean)
+                local sd_gap_abs = r(sd)
+                
+                if `has_weights' {
+                    quietly sum pov_gap_rel [aw=dwt] if poor == 1
+                }
+                else {
+                    quietly sum pov_gap_rel if poor == 1
+                }
+                local avg_gap_rel = r(mean) * 100
+                
+                * FGT indicators
+                if `has_weights' {
+                    quietly sum pov_gap_ratio [aw=dwt]
+                }
+                else {
+                    quietly sum pov_gap_ratio
+                }
+                local fgt1 = r(mean)
+                
+                if `has_weights' {
+                    quietly sum pov_gap_sq [aw=dwt]
+                }
+                else {
+                    quietly sum pov_gap_sq
+                }
+                local fgt2 = r(mean)
+                
+                * Poverty threshold
+                if `has_weights' {
+                    quietly sum idpovline60 [aw=dwt]
+                }
+                else {
+                    quietly sum idpovline60
+                }
+                local poverty_line = r(mean)
+                
+                * Median equivalized income
+                if `has_weights' {
+                    quietly _pctile hh_dispyeq [aw=dwt], p(50)
+                }
+                else {
+                    quietly _pctile hh_dispyeq, p(50)
+                }
+                local median_inc = r(r1)
+                
+                * Income distribution percentiles
+                if `has_weights' {
+                    quietly _pctile hh_dispyeq [aw=dwt], p(10 25 75 90)
+                }
+                else {
+                    quietly _pctile hh_dispyeq, p(10 25 75 90)
+                }
+                local p10 = r(r1)
+                local p25 = r(r2)
+                local p75 = r(r3)
+                local p90 = r(r4)
+                
+                * Mean equivalized income
+                if `has_weights' {
+                    quietly sum hh_dispyeq [aw=dwt]
+                }
+                else {
+                    quietly sum hh_dispyeq
+                }
+                local mean_inc = r(mean)
+                
+                * Average total household income (not equivalized)
+                if `has_weights' {
+                    quietly sum hh_dispy_total [aw=dwt]
+                }
+                else {
+                    quietly sum hh_dispy_total
+                }
+                local mean_hh_total = r(mean)
+                
+                * Average household size (from equivalence scale)
+                if `has_weights' {
+                    quietly sum hh_eqfac [aw=dwt]
+                }
+                else {
+                    quietly sum hh_eqfac
+                }
+                local avg_hhsize = r(mean)
+                
+                * Gini coefficient (optional, if inequal7 installed)
+                local gini = .
+                capture {
+                    if `has_weights' {
+                        quietly inequal7 hh_dispyeq [aw=dwt], return
+                    }
+                    else {
+                        quietly inequal7 hh_dispyeq, return
+                    }
+                    local gini = r(gini)
+                }
+            }
+            
+            * Save results
+            restore
+            clear
+            set obs 1
+            gen year = `yr'
+            gen str20 scenario = "`scen'"
+            gen poverty_rate = `poverty_rate'
+            gen n_poor = `n_poor'
+            gen n_total = `n_total'
+            gen avg_gap_abs = `avg_gap_abs'
+            gen sd_gap_abs = `sd_gap_abs'
+            gen avg_gap_rel = `avg_gap_rel'
+            gen fgt1 = `fgt1'
+            gen fgt2 = `fgt2'
+            gen poverty_line = `poverty_line'
+            gen median_income = `median_inc'
+            gen mean_income_eq = `mean_inc'
+            gen mean_income_total = `mean_hh_total'
+            gen avg_hhsize = `avg_hhsize'
+            gen p10 = `p10'
+            gen p25 = `p25'
+            gen p75 = `p75'
+            gen p90 = `p90'
+            gen gini = `gini'
+            
+            if `first' == 1 {
+                save `results', replace
+                local first = 0
+            }
+            else {
+                append using `results'
+                save `results', replace
+            }
+        }
+        else {
+            restore
+        }
+    }
+}
 
 
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+*===============================================================================
+* FINAL OUTPUT AND EXPORT
+*===============================================================================
+
+use `results', clear
+sort year scenario
+
+order year scenario poverty_rate n_poor n_total avg_gap_abs sd_gap_abs avg_gap_rel fgt1 fgt2 poverty_line median_income mean_income_eq mean_income_total avg_hhsize p10 p25 p75 p90 gini
+
+* Formatting
+format poverty_rate avg_gap_rel %9.2f
+format n_poor n_total %15.0fc
+format avg_gap_abs sd_gap_abs poverty_line median_income mean_income_eq mean_income_total %9.0f
+format avg_hhsize %9.2f
+format p10 p25 p75 p90 %9.0f
+format fgt1 fgt2 gini %9.4f
+
+* Variable labels
+label variable year "Year"
+label variable scenario "Scenario"
+label variable poverty_rate "Poverty rate (%)"
+label variable n_poor "Number of poor households"
+label variable n_total "Total households"
+label variable avg_gap_abs "Avg poverty gap (€)"
+label variable sd_gap_abs "SD poverty gap (€)"
+label variable avg_gap_rel "Avg poverty gap (%)"
+label variable fgt1 "FGT1 (Intensity)"
+label variable fgt2 "FGT2 (Severity)"
+label variable poverty_line "Poverty threshold (€)"
+label variable median_income "Median equiv. income (€)"
+label variable mean_income_eq "Mean equiv. income (€)"
+label variable mean_income_total "Mean total HH income (€)"
+label variable avg_hhsize "Avg HH size (equiv.)"
+label variable gini "Gini coefficient"
+
+* Display results
+list year scenario poverty_rate avg_gap_abs poverty_line mean_income_total mean_income_eq, separator(0)
+
+* Export
+capture mkdir "$output"
+export excel "$output/poverty_household_level_scenarios.xlsx", firstrow(varlabels) replace sheet("Household_Level")
+
+* Summary table by scenario
+di _n "=== SUMMARY BY SCENARIO ===" _n
+table (year) (scenario), statistic(mean poverty_rate) statistic(mean avg_gap_abs) statistic(mean poverty_line) nformat(%9.2f)
+
+di _n "=== Analysis complete ===" _n
+di "Results saved in: $output/poverty_household_level_scenarios.xlsx"
+di _n "Key variables created:"
+di "  1. hh_dispy_total:  Total household disposable income"
+di "  2. hh_eqfac:        Household equivalence factor (modified OECD)"
+di "  3. hh_dispyeq:      Equivalized household income"
 
 
 
