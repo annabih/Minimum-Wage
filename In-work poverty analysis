@@ -60,6 +60,51 @@ label variable hh_ils_dispy_total "Total household disposable income"
 di "Total household income statistics:"
 sum hh_ils_dispy_total, detail
 
+***************************************************
+* Calculate equalized disposable household income
+***************************************************
+di _n "=== STEP 2a: Calculating equivalence scale ===" _n
+
+* Define adults
+gen adult = dag >= 14 if dag < . */ adults = 1 children = 0/*
+
+* Create age categories for equivalence scale
+gen eq_weight = .
+replace eq_weight = 0.3 if adult == 0  /*Children*/
+replace eq_weight = 0.5 if adult == 1  /*Adults (additional)*/
+
+* Adjust weight for one adult in the household to 1.0 
+bysort year scenario idhh idperson (adult): gen first_adult = adult == 1 & _n == _N
+
+replace eq_weight = 1 if first_adult == 1
+
+* Sum up equivalence weights per household
+bysort year scenario idhh: egen hh_eqfac = total(eq_weight)
+label variable hh_eqfac "Household equivalence factor (modified OECD)"
+
+* Check calculation
+di "Equivalence scale statistics:"
+sum hh_eqfac, detail
+
+
+* Calculate equalized desposaple income
+
+gen eq_income = hh_ils_dispy_total / hh_eqfac
+
+label variable eq_income "Equivalised disposable income"
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
