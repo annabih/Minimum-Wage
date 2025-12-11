@@ -29,7 +29,7 @@ di _n "=== Original observations: " _N " ===" _n
 ***********************************************
 
 * List of relevant variables to convert
-local numeric_vars "ils_dispy dwt dag ydses_o liwmy"
+local numeric_vars "ils_dispy dwt dag ydses_o yemmy"
 
 foreach var of local numeric_vars {
     capture confirm variable `var'
@@ -55,49 +55,66 @@ label variable euq_inc_hh "Equivalized household disposable income"
 rename dag age
 label variable age "Age"
 
-rename liwmy in_work
+rename yemmy in_work
 label variable in_work "Number of months spent in full-time and/or part-time work"
 
 ****************************************
 * Calculate poverty threshold
 ****************************************
 
-di _n "=== Calculating poverty thresholds (with weights) ===" _n
+di _n "=== Calculating poverty thresholds (FACTUAL ONLY) ===" _n
 
-* Check for weights
 capture confirm variable dwt
 local has_weights = (_rc == 0)
 
-if !`has_weights' {
-    di as error "WARNING: No weights (dwt) found - using unweighted analysis"
-}
+* Calculate thresholds using preserve/restore
+preserve
 
-* Calculate threshold by year and scenario
+* Keep one observation per household
+bysort year scenario idhh: keep if _n == 1
+
+di "Calculating thresholds on " _N " households"
+
+* Calculate median ONLY for factual scenario
+gen median_euq = .
 gen idpovline60 = .
-label variable idpovline60 "Poverty threshold (60% weighted median)"
 
 foreach yr of local years {
-    foreach scen of local scenarios {
-        capture {
-            preserve
-            * Keep one obs per household for median calculation
-            bysort year scenario idhh: keep if _n == 1
-            
-            if `has_weights' {
-                quietly _pctile euq_inc_hh [aw=dwt] if year == `yr' & scenario == "`scen'", p(50)
-            }
-            else {
-                quietly _pctile euq_inc_hh if year == `yr' & scenario == "`scen'", p(50)
-            }
-            local median_yr = r(r1)
-            restore
-            
-            quietly replace idpovline60 = 0.60 * `median_yr' if year == `yr' & scenario == "`scen'"
-            
-            di "Year `yr', Scenario `scen': Median = " %9.2f `median_yr' ", Threshold (60%) = " %9.2f (0.60 * `median_yr')
+    capture {
+        if `has_weights' {
+            quietly _pctile euq_inc_hh [aw=dwt] if year == `yr' & scenario == "factual", p(50)
         }
+        else {
+            quietly _pctile euq_inc_hh if year == `yr' & scenario == "factual", p(50)
+        }
+        local median_val = r(r1)
+        
+        * Apply this threshold to ALL scenarios for this year
+        quietly replace median_euq = `median_val' if year == `yr'
+        quietly replace idpovline60 = 0.60 * `median_val' if year == `yr'
+        
+        di "Year `yr': Median (factual) = " %9.2f `median_val' ", Threshold = " %9.2f (0.60 * `median_val') " (applied to all scenarios)"
     }
 }
+
+* Keep only year-scenario-threshold combinations
+keep year scenario median_euq idpovline60
+duplicates drop
+
+* Save thresholds
+tempfile thresholds
+save `thresholds', replace
+
+restore
+
+* Merge thresholds to individual data
+merge m:1 year scenario using `thresholds', nogen keep(match)
+
+label variable idpovline60 "Poverty threshold (60% weighted median of factual)"
+label variable median_euq "Median equivalized income (factual)"
+
+di _n "=== Thresholds merged ===" _n
+di _n "=== This may take up to 15 minutes ===" _n
 
 ****************************
 * Identify poverty status
@@ -105,7 +122,7 @@ foreach yr of local years {
 di _n "=== Identifying poverty status ===" _n
 
 gen poverty = (euq_inc_hh < idpovline60)
-label variable poor "At risk of poverty (1=yes)"
+label variable poverty "At risk of poverty (1=yes)"
 
 *******************************
 * Identify working population
@@ -130,8 +147,8 @@ gen worker = (months_worked >= 7 & age >= 18)
 label variable worker "Worker (≥7 months, age ≥18)"
 
 * In-work poverty (individual)
-gen inwork_poor = (worker == 1 & poor == 1)
-label variable inwork_poor "In-work poverty (1=yes)"
+gen inwork_poverty = (worker == 1 & poverty == 1)
+label variable inwork_poverty "In-work poverty (1=yes)"
 
 ***************************************
 * In-work poverty by year and scenario
