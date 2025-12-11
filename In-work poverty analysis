@@ -10,7 +10,7 @@ clear all
 set more off
 
 * Set local paths
-global data "C:/Users/anna/Desktop/Inputfiles_Stata/Stata_Codes/S1_Baseline/merged_data_all_years.dta"
+use "C:\Users\ALochbih\OneDrive - Bundesarbeitskammer\Desktop\EUROMOD\InWorkPoverty\Stata\Policy_V1_MA_AllYears.dta"
 global output "C:/Users/anna/Desktop/Ergebnisse"
 
 * Define years and scenarios
@@ -29,7 +29,7 @@ di _n "=== Original observations: " _N " ===" _n
 ***********************************************
 
 * List of relevant variables to convert
-local numeric_vars "ils_dispy dwt dag ydses_o"
+local numeric_vars "ils_dispy dwt dag ydses_o liwmy"
 
 foreach var of local numeric_vars {
     capture confirm variable `var'
@@ -46,70 +46,99 @@ foreach var of local numeric_vars {
     }
 }
 
+**********************************
+* Renaming variables for clarity
+**********************************
+rename ydses_o euq_inc_hh
+label variable euq_inc_hh "Equivalized household disposable income"
+
+rename dag age
+label variable age "Age"
+
+rename liwmy in_work
+label variable in_work "Number of months spent in full-time and/or part-time work"
 
 ****************************************
 * Calculate poverty threshold
 ****************************************
 
-di _n "=== Calculating poverty thresholds ===" _n
+di _n "=== Calculating poverty thresholds (with weights) ===" _n
 
-* Initialize poverty threshold variable
+* Check for weights
+capture confirm variable dwt
+local has_weights = (_rc == 0)
+
+if !`has_weights' {
+    di as error "WARNING: No weights (dwt) found - using unweighted analysis"
+}
+
+* Calculate threshold by year and scenario
 gen idpovline60 = .
-label variable idpovline60 "At-risk-of-poverty threshold (60% median)"
+label variable idpovline60 "Poverty threshold (60% weighted median)"
 
-* Calculate threshold for each year and scenario combination
 foreach yr of local years {
     foreach scen of local scenarios {
         capture {
+            preserve
+            * Keep one obs per household for median calculation
+            bysort year scenario idhh: keep if _n == 1
+            
             if `has_weights' {
-                quietly _pctile ydses_o [aw=dwt] if year == `yr' & scenario == "`scen'", p(50)
+                quietly _pctile euq_inc_hh [aw=dwt] if year == `yr' & scenario == "`scen'", p(50)
             }
             else {
-                quietly _pctile ydses_o if year == `yr' & scenario == "`scen'", p(50)
+                quietly _pctile euq_inc_hh if year == `yr' & scenario == "`scen'", p(50)
             }
             local median_yr = r(r1)
+            restore
             
             quietly replace idpovline60 = 0.60 * `median_yr' if year == `yr' & scenario == "`scen'"
             
-            di "Year `yr', Scenario `scen': Median = " %9.2f `median_yr' ", Threshold = " %9.2f (0.60 * `median_yr')
+            di "Year `yr', Scenario `scen': Median = " %9.2f `median_yr' ", Threshold (60%) = " %9.2f (0.60 * `median_yr')
         }
     }
 }
 
-*===============================================================================
-* CALCULATE POVERTY INDICATORS
-*===============================================================================
+****************************
+* Identify poverty status
+****************************
+di _n "=== Identifying poverty status ===" _n
 
-di _n "=== Calculating poverty indicators ===" _n
-
-* At-risk-of-poverty
-gen poor = (ydses_o < idpovline60)
+gen poverty = (euq_inc_hh < idpovline60)
 label variable poor "At risk of poverty (1=yes)"
 
-* Poverty gaps
-gen pov_gap_abs = idpovline60 - ydses_o if poor == 1
-label variable pov_gap_abs "Poverty gap absolute (Euro)"
+*******************************
+* Identify working population
+*******************************
+di _n "=== Identifying workers (Eurostat definition) ===" _n
 
-gen pov_gap_rel = (idpovline60 - ydses_o) / idpovline60 if poor == 1
-label variable pov_gap_rel "Poverty gap relative (share)"
+* Months worked (from in_work)
+capture confirm variable in_work
+if _rc == 0 {
+    gen months_worked = in_work
+    replace months_worked = 0 if months_worked == .
+}
+else {
+    di as error "WARNING: Variable in_work not found"
+    gen months_worked = 0
+}
 
-* FGT indicators
-gen pov_gap_ratio = (idpovline60 - ydses_o) / idpovline60 if poor == 1
-replace pov_gap_ratio = 0 if poor == 0
-label variable pov_gap_ratio "FGT1 Poverty Gap Ratio"
+label variable months_worked "Months worked per year"
 
-gen pov_gap_sq = ((idpovline60 - ydses_o) / idpovline60)^2 if poor == 1
-replace pov_gap_sq = 0 if poor == 0
-label variable pov_gap_sq "FGT2 Squared Poverty Gap"
+* Define worker (Eurostat: at least 7 months, age 18+)
+gen worker = (months_worked >= 7 & age >= 18)
+label variable worker "Worker (≥7 months, age ≥18)"
 
+* In-work poverty (individual)
+gen inwork_poor = (worker == 1 & poor == 1)
+label variable inwork_poor "In-work poverty (1=yes)"
 
-*===============================================================================
-* CALCULATE RESULTS BY YEAR AND SCENARIO
-*===============================================================================
+***************************************
+* In-work poverty by year and scenario
+***************************************
+di _n "=== Calculating results by year and scenario ===" _n
 
-di _n "=== Aggregating results by year and scenario ===" _n
-
-tempfile results
+tempfile results_inwork
 local first = 1
 
 foreach yr of local years {
@@ -118,64 +147,54 @@ foreach yr of local years {
         preserve
         keep if year == `yr' & scenario == "`scen'"
         
-        di _n "Processing: Year `yr', Scenario `scen' (N = " _N ")"
-        
         if _N > 0 {
             
             capture {
-                * Headcount ratio
-                if `has_weights' {
-                    quietly sum poor [aw=dwt]
-                }
-                else {
-                    quietly sum poor
-                }
-                local poverty_rate = r(mean) * 100
-                local n_poor = r(sum)
-                
-                * Total number of households
+                * Total workers
                 if `has_weights' {
                     quietly sum dwt
-                    local n_total = r(sum)
+                    local n_workers = r(sum)
                 }
                 else {
-                    local n_total = _N
+                    local n_workers = _N
                 }
                 
-                * Average poverty gap (only for poor)
+                * IWP rate
                 if `has_weights' {
-                    quietly sum pov_gap_abs [aw=dwt] if poor == 1
+                    quietly sum inwork_poor [aw=dwt]
                 }
                 else {
-                    quietly sum pov_gap_abs if poor == 1
+                    quietly sum inwork_poor
                 }
-                local avg_gap_abs = r(mean)
-                local sd_gap_abs = r(sd)
+                local iwp_rate = r(mean) * 100
+                local n_iwp = r(sum)
                 
+                * Average poverty gap (absolute, € - only for IWP)
                 if `has_weights' {
-                    quietly sum pov_gap_rel [aw=dwt] if poor == 1
+                    quietly sum pov_gap_abs [aw=dwt] if inwork_poor == 1
                 }
                 else {
-                    quietly sum pov_gap_rel if poor == 1
+                    quietly sum pov_gap_abs if inwork_poor == 1
                 }
-                local avg_gap_rel = r(mean) * 100
+                local avg_pov_gap_abs = r(mean)
                 
-                * FGT indicators
+                * Average poverty gap (relative, % - only for IWP)
                 if `has_weights' {
-                    quietly sum pov_gap_ratio [aw=dwt]
+                    quietly sum pov_gap_rel [aw=dwt] if inwork_poor == 1
                 }
                 else {
-                    quietly sum pov_gap_ratio
+                    quietly sum pov_gap_rel if inwork_poor == 1
                 }
-                local fgt1 = r(mean)
+                local avg_pov_gap_rel = r(mean)
                 
+                * Average months worked
                 if `has_weights' {
-                    quietly sum pov_gap_sq [aw=dwt]
+                    quietly sum months_worked [aw=dwt]
                 }
                 else {
-                    quietly sum pov_gap_sq
+                    quietly sum months_worked
                 }
-                local fgt2 = r(mean)
+                local avg_months = r(mean)
                 
                 * Poverty threshold
                 if `has_weights' {
@@ -184,101 +203,49 @@ foreach yr of local years {
                 else {
                     quietly sum idpovline60
                 }
-                local poverty_line = r(mean)
+                local pov_line = r(mean)
                 
-                * Median equivalized income
+                * Mean equiv income
                 if `has_weights' {
-                    quietly _pctile hh_dispyeq [aw=dwt], p(50)
+                    quietly sum euq_inc_hh [aw=dwt]
                 }
                 else {
-                    quietly _pctile hh_dispyeq, p(50)
-                }
-                local median_inc = r(r1)
-                
-                * Income distribution percentiles
-                if `has_weights' {
-                    quietly _pctile hh_dispyeq [aw=dwt], p(10 25 75 90)
-                }
-                else {
-                    quietly _pctile hh_dispyeq, p(10 25 75 90)
-                }
-                local p10 = r(r1)
-                local p25 = r(r2)
-                local p75 = r(r3)
-                local p90 = r(r4)
-                
-                * Mean equivalized income
-                if `has_weights' {
-                    quietly sum hh_dispyeq [aw=dwt]
-                }
-                else {
-                    quietly sum hh_dispyeq
+                    quietly sum euq_inc_hh
                 }
                 local mean_inc = r(mean)
                 
-                * Average total household income (not equivalized)
+                * Median equiv income
                 if `has_weights' {
-                    quietly sum hh_dispy_total [aw=dwt]
+                    quietly _pctile euq_inc_hh [aw=dwt], p(50)
                 }
                 else {
-                    quietly sum hh_dispy_total
+                    quietly _pctile euq_inc_hh, p(50)
                 }
-                local mean_hh_total = r(mean)
-                
-                * Average household size (from equivalence scale)
-                if `has_weights' {
-                    quietly sum hh_eqfac [aw=dwt]
-                }
-                else {
-                    quietly sum hh_eqfac
-                }
-                local avg_hhsize = r(mean)
-                
-                * Gini coefficient (optional, if inequal7 installed)
-                local gini = .
-                capture {
-                    if `has_weights' {
-                        quietly inequal7 hh_dispyeq [aw=dwt], return
-                    }
-                    else {
-                        quietly inequal7 hh_dispyeq, return
-                    }
-                    local gini = r(gini)
-                }
+                local median_inc = r(r1)
             }
             
-            * Save results
             restore
             clear
             set obs 1
             gen year = `yr'
             gen str20 scenario = "`scen'"
-            gen poverty_rate = `poverty_rate'
-            gen n_poor = `n_poor'
-            gen n_total = `n_total'
-            gen avg_gap_abs = `avg_gap_abs'
-            gen sd_gap_abs = `sd_gap_abs'
-            gen avg_gap_rel = `avg_gap_rel'
-            gen fgt1 = `fgt1'
-            gen fgt2 = `fgt2'
-            gen poverty_line = `poverty_line'
-            gen median_income = `median_inc'
-            gen mean_income_eq = `mean_inc'
-            gen mean_income_total = `mean_hh_total'
-            gen avg_hhsize = `avg_hhsize'
-            gen p10 = `p10'
-            gen p25 = `p25'
-            gen p75 = `p75'
-            gen p90 = `p90'
-            gen gini = `gini'
+            gen iwp_rate = `iwp_rate'
+            gen n_iwp = `n_iwp'
+            gen n_workers = `n_workers'
+            gen avg_pov_gap_abs = `avg_pov_gap_abs'
+            gen avg_pov_gap_rel = `avg_pov_gap_rel'
+            gen avg_months_worked = `avg_months'
+            gen poverty_line = `pov_line'
+            gen mean_euq_inc = `mean_inc'
+            gen median_euq_inc = `median_inc'
             
             if `first' == 1 {
-                save `results', replace
+                save `results_inwork', replace
                 local first = 0
             }
             else {
-                append using `results'
-                save `results', replace
+                append using `results_inwork'
+                save `results_inwork', replace
             }
         }
         else {
@@ -287,98 +254,143 @@ foreach yr of local years {
     }
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 *===============================================================================
-* FINAL OUTPUT AND EXPORT
+* PREPARE WIDE FORMAT FOR EXCEL (Scenarios as columns)
 *===============================================================================
 
-use `results', clear
+use `results_inwork', clear
 sort year scenario
 
-order year scenario poverty_rate n_poor n_total avg_gap_abs sd_gap_abs avg_gap_rel fgt1 fgt2 poverty_line median_income mean_income_eq mean_income_total avg_hhsize p10 p25 p75 p90 gini
+di _n "=== Preparing wide format output ===" _n
 
-* Formatting
-format poverty_rate avg_gap_rel %9.2f
-format n_poor n_total %15.0fc
-format avg_gap_abs sd_gap_abs poverty_line median_income mean_income_eq mean_income_total %9.0f
-format avg_hhsize %9.2f
-format p10 p25 p75 p90 %9.0f
-format fgt1 fgt2 gini %9.4f
+* Reshape to wide format (scenarios as columns)
+reshape wide iwp_rate n_iwp n_workers avg_pov_gap_abs avg_pov_gap_rel avg_months_worked poverty_line mean_euq_inc median_euq_inc, i(year) j(scenario) string
 
-* Variable labels
-label variable year "Year"
-label variable scenario "Scenario"
-label variable poverty_rate "Poverty rate (%)"
-label variable n_poor "Number of poor households"
-label variable n_total "Total households"
-label variable avg_gap_abs "Avg poverty gap (€)"
-label variable sd_gap_abs "SD poverty gap (€)"
-label variable avg_gap_rel "Avg poverty gap (%)"
-label variable fgt1 "FGT1 (Intensity)"
-label variable fgt2 "FGT2 (Severity)"
-label variable poverty_line "Poverty threshold (€)"
-label variable median_income "Median equiv. income (€)"
-label variable mean_income_eq "Mean equiv. income (€)"
-label variable mean_income_total "Mean total HH income (€)"
-label variable avg_hhsize "Avg HH size (equiv.)"
-label variable gini "Gini coefficient"
+* Reorder columns: factual first, then v1-v10
+order year *factual *v1 *v2 *v3 *v4 *v5 *v6 *v7 *v8 *v9 *v10
 
-* Display results
-list year scenario poverty_rate avg_gap_abs poverty_line mean_income_total mean_income_eq, separator(0)
+*===============================================================================
+* CREATE FORMATTED OUTPUT WITH ALL YEARS STACKED
+*===============================================================================
 
-* Export
+di _n "=== Creating formatted output ===" _n
+
+* Create final output dataset
+clear
+set obs 1000
+gen str50 Variable = ""
+gen year_label = ""
+
+* Generate columns for scenarios
+foreach scen in factual v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+    gen `scen' = .
+}
+
+local row = 1
+
+* Loop through years and create tables
+use `results_inwork', clear
+reshape wide iwp_rate n_iwp n_workers avg_pov_gap_abs avg_pov_gap_rel avg_months_worked poverty_line mean_euq_inc median_euq_inc, i(year) j(scenario) string
+
+foreach yr of local years {
+    
+    preserve
+    keep if year == `yr'
+    
+    if _N > 0 {
+        
+        * Year header
+        local row = `row' + 2
+        qui replace year_label = "Austria `yr'" in `row'
+        local row = `row' + 1
+        
+        * Variable labels column
+        qui replace Variable = "IWP rate (%)" in `row'
+        local r1 = `row'
+        local row = `row' + 1
+        
+        qui replace Variable = "Number IWP" in `row'
+        local r2 = `row'
+        local row = `row' + 1
+        
+        qui replace Variable = "Number workers" in `row'
+        local r3 = `row'
+        local row = `row' + 1
+        
+        qui replace Variable = "Avg poverty gap (€)" in `row'
+        local r4 = `row'
+        local row = `row' + 1
+        
+        qui replace Variable = "Avg poverty gap (%)" in `row'
+        local r5 = `row'
+        local row = `row' + 1
+        
+        qui replace Variable = "Avg months worked" in `row'
+        local r6 = `row'
+        local row = `row' + 1
+        
+        qui replace Variable = "Poverty line (€)" in `row'
+        local r7 = `row'
+        local row = `row' + 1
+        
+        qui replace Variable = "Mean equiv. income (€)" in `row'
+        local r8 = `row'
+        local row = `row' + 1
+        
+        qui replace Variable = "Median equiv. income (€)" in `row'
+        local r9 = `row'
+        
+        * Fill in values for each scenario
+        foreach scen in factual v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+            qui replace `scen' = iwp_rate`scen'[1] in `r1'
+            qui replace `scen' = n_iwp`scen'[1] in `r2'
+            qui replace `scen' = n_workers`scen'[1] in `r3'
+            qui replace `scen' = avg_pov_gap_abs`scen'[1] in `r4'
+            qui replace `scen' = avg_pov_gap_rel`scen'[1] in `r5'
+            qui replace `scen' = avg_months_worked`scen'[1] in `r6'
+            qui replace `scen' = poverty_line`scen'[1] in `r7'
+            qui replace `scen' = mean_euq_inc`scen'[1] in `r8'
+            qui replace `scen' = median_euq_inc`scen'[1] in `r9'
+        }
+        
+        restore
+    }
+}
+
+* Keep only filled rows
+keep if Variable != "" | year_label != ""
+
+* Merge year labels into Variable column for headers
+replace Variable = year_label if year_label != ""
+drop year_label
+
+*===============================================================================
+* EXPORT TO EXCEL
+*===============================================================================
+
+di _n "=== Exporting to Excel ===" _n
+
 capture mkdir "$output"
-export excel "$output/poverty_household_level_scenarios.xlsx", firstrow(varlabels) replace sheet("Household_Level")
 
-* Summary table by scenario
-di _n "=== SUMMARY BY SCENARIO ===" _n
-table (year) (scenario), statistic(mean poverty_rate) statistic(mean avg_gap_abs) statistic(mean poverty_line) nformat(%9.2f)
+export excel "$output/inwork_poverty_wide_format.xlsx", replace sheet("InWork_Poverty") firstrow(variables)
 
-di _n "=== Analysis complete ===" _n
-di "Results saved in: $output/poverty_household_level_scenarios.xlsx"
-di _n "Key variables created:"
-di "  1. hh_dispy_total:  Total household disposable income"
-di "  2. hh_eqfac:        Household equivalence factor (modified OECD)"
-di "  3. hh_dispyeq:      Equivalized household income"
-
-
-
-
-
-
-
-
-
+di _n "==============================================================================="
+di "ANALYSIS COMPLETE"
+di "===============================================================================" _n
+di "Results saved in: $output/inwork_poverty_wide_format.xlsx"
+di _n "Excel format:"
+di "  - Column A: Variable names"
+di "  - Column B: factual"
+di "  - Column C-L: v1 through v10"
+di "  - All years stacked vertically with 2-row spacing"
+di _n "Variables included:"
+di "  - IWP rate (%)"
+di "  - Number IWP"
+di "  - Number workers"
+di "  - Avg poverty gap (€) - distance from poverty line"
+di "  - Avg poverty gap (%) - % distance from poverty line"
+di "  - Avg months worked"
+di "  - Poverty line (€)"
+di "  - Mean equiv. income (€)"
+di "  - Median equiv. income (€)"
+di _n "==============================================================================="
