@@ -24,7 +24,7 @@ di _n "=== Original observations: " _N " ===" _n
 ***********************************************
 
 * List of relevant variables to convert
-local numeric_vars "ils_udb_yds dwt dag yemmy"
+local numeric_vars "ils_udb_yds dwt dag liwmy"
 
 foreach var of local numeric_vars {
     capture confirm variable `var'
@@ -59,7 +59,7 @@ if _rc != 0 {
 rename dag age
 label variable age "Age"
 
-rename yemmy in_work
+rename liwmy in_work
 label variable in_work "Number of months spent in full-time and/or part-time work"
 
 * Create ind_disp_inc from ils_udb_yds
@@ -184,8 +184,8 @@ else {
     gen months_worked = 0
 }
 
-gen worker = (months_worked >= 6 & age >= 18)
-label variable worker "Worker (≥6 months, age ≥18)"
+gen worker = (months_worked >= 7 & age >= 18 & age <= 64)
+label variable worker "Worker (≥7 months, age ≥18 & < 64)"
 
 gen inwork_poor = (worker == 1 & poor == 1)
 label variable inwork_poor "In-work poverty"
