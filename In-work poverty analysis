@@ -24,7 +24,7 @@ di _n "=== Original observations: " _N " ===" _n
 ***********************************************
 
 * List of relevant variables to convert
-local numeric_vars "ils_udb_yds dwt dag liwmy"
+local numeric_vars "ils_dispy dwt dag liwmy"
 
 foreach var of local numeric_vars {
     capture confirm variable `var'
@@ -43,11 +43,11 @@ foreach var of local numeric_vars {
 }
 
 **********************************
-* Check if ils_udb_yds exists
+* Check if ils_dispy exists
 **********************************
-capture confirm variable ils_udb_yds
+capture confirm variable ils_dispy
 if _rc != 0 {
-    di as error "ERROR: Variable ils_udb_yds not found in dataset!"
+    di as error "ERROR: Variable ils_dispy not found in dataset!"
     di as error "Available income variables:"
     describe *disp* *inc*
     error 111
@@ -62,9 +62,9 @@ label variable age "Age"
 rename liwmy in_work
 label variable in_work "Number of months spent in full-time and/or part-time work"
 
-* Create ind_disp_inc from ils_udb_yds
-gen ind_disp_inc = ils_udb_yds
-label variable ind_disp_inc "Individual disposable income (from ils_udb_yds)"
+* Create ind_disp_inc from ils_dispy
+gen ind_disp_inc = ils_dispy
+label variable ind_disp_inc "Individual disposable income (from ils_dispy)"
 
 * Drop old euq_inc_hh if it exists (was ydses_o)
 capture drop euq_inc_hh
@@ -77,38 +77,39 @@ di _n "Variables prepared successfully" _n
 
 di _n "=== Calculating equivalized household income ===" _n
 
-* Step 1: Calculate equivalence weights
+capture drop eq_weight
 gen eq_weight = .
-replace eq_weight = 0.3 if age < 14   
-replace eq_weight = 0.5 if age >= 14  
+replace eq_weight = 0.3 if age < 14
+replace eq_weight = 0.5 if age >= 14
 
-* Identify first person in household (gets weight 1.0)
 sort year scenario idhh age
-bysort year scenario idhh: gen first_person = (_n == 1)
-replace eq_weight = 1.0 if first_person == 1
 
-* Step 2: Sum equivalence weights per household
+capture drop adult_count
+bysort year scenario idhh: gen adult_count = sum(age >= 14)
+
+replace eq_weight = 1.0 if age >= 14 & adult_count == 1
+drop adult_count
+
+capture drop hh_eqfac
 bysort year scenario idhh: egen hh_eqfac = total(eq_weight)
-label variable hh_eqfac "Household equivalence factor"
+label variable hh_eqfac "Household equivalence factor (Modified OECD)"
 
 di "Equivalence factors calculated"
 
-* Step 3: Sum individual disposable incomes to household level
+capture drop hh_disp_inc
 bysort year scenario idhh: egen hh_disp_inc = total(ind_disp_inc)
 label variable hh_disp_inc "Total household disposable income"
 
 di "Household incomes summed"
 
-* Step 4: Calculate equivalized household income
+capture drop euq_inc_hh
 gen euq_inc_hh = hh_disp_inc / hh_eqfac
 label variable euq_inc_hh "Equivalized household disposable income (calculated)"
 
-* Filter: Keep only valid incomes
 keep if euq_inc_hh != . & euq_inc_hh >= 0
 
-di "Equivalized household income calculated from ils_udb_yds"
+di "Equivalized household income calculated"
 di "Total observations: " _N
-
 ****************************************
 * Calculate poverty threshold
 ****************************************
