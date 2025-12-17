@@ -68,28 +68,55 @@ di _n "Variables prepared successfully" _n
 
 *************************************************************
 * CALCULATE EQUIVALIZED HOUSEHOLD INCOME (Modified OECD Scale)
+* CHANGED: Reference person = first person per HH with age >= 14
+*          NO sorting by age (like R code)
 *************************************************************
 
 di _n "=== Calculating equivalized household income ===" _n
+di _n "=== Using R-style reference person (first person with age >= 14) ===" _n
+
+* IMPORTANT: Do NOT sort by age - keep original data order like R code
+* R code: ref_person=ifelse(row_number()==1&dag>=14,1,0)
 
 capture drop eq_weight
+capture drop ref_person
+capture drop row_num
+
+* Generate row number within each household (preserving original order)
+bysort year scenario idhh: gen row_num = _n
+
+* Initialize eq_weight based on age
 gen eq_weight = .
 replace eq_weight = 0.3 if age < 14
 replace eq_weight = 0.5 if age >= 14
 
-sort year scenario idhh age
+* Reference person: first person in household with age >= 14
+* This matches R: ref_person=ifelse(row_number()==1&dag>=14,1,0)
+gen ref_person = (row_num == 1 & age >= 14)
 
-capture drop adult_count
-bysort year scenario idhh: gen adult_count = sum(age >= 14)
+* First person with age >= 14 gets weight 1
+replace eq_weight = 1.0 if ref_person == 1
 
-replace eq_weight = 1.0 if age >= 14 & adult_count == 1
-drop adult_count
+* Handle case where first person is a child (age < 14)
+* Need to find the first adult in the household
+bysort year scenario idhh: gen is_adult = (age >= 14)
+bysort year scenario idhh: gen adult_cumsum = sum(is_adult)
+gen first_adult_in_hh = (is_adult == 1 & adult_cumsum == 1)
+
+* If first person was a child, the first adult gets weight 1
+replace eq_weight = 1.0 if first_adult_in_hh == 1 & ref_person == 0
+
+* Clean up
+drop row_num is_adult adult_cumsum first_adult_in_hh
+
+label variable ref_person "Reference person (first person with age >= 14, R-style)"
+label variable eq_weight "Equivalence weight (Modified OECD, R-style)"
 
 capture drop hh_eqfac
 bysort year scenario idhh: egen hh_eqfac = total(eq_weight)
 label variable hh_eqfac "Household equivalence factor (Modified OECD)"
 
-di "Equivalence factors calculated"
+di "Equivalence factors calculated (R-style: first person with age >= 14)"
 
 capture drop hh_disp_inc
 bysort year scenario idhh: egen hh_disp_inc = total(ind_disp_inc)
@@ -108,17 +135,22 @@ di "Total observations: " _N
 
 ****************************************
 * Calculate poverty threshold per year and scenario
+* CHANGED: Median on PERSON level (not household level) like R code
 ****************************************
 
-di _n "=== Calculating poverty thresholds (year and scenario specific) ===" _n
+di _n "=== Calculating poverty thresholds (PERSON level, like R code) ===" _n
 
 capture confirm variable dwt
 local has_weights = (_rc == 0)
 
+* IMPORTANT: Do NOT reduce to household level - calculate median on PERSON level
+* R code: arop_rate=laeken::weightedMedian(ils_dispy_ses,dwt)*.6
+* This means all persons contribute to the median with their equivalized HH income
+
 preserve
 
-bysort year scenario idhh: keep if _n == 1
-di "Calculating thresholds on " _N " households"
+* Keep ALL persons (not just one per household) - this is the key difference!
+di "Calculating thresholds on " _N " persons (person-level median like R)"
 
 tempfile thresholds
 tempname h
@@ -130,6 +162,7 @@ foreach yr of local years {
         quietly count if year == `yr' & scenario == "`scen'"
         if r(N) == 0 continue
 
+        * Calculate median on PERSON level (each person with their euq_inc_hh)
         if `has_weights' {
             quietly _pctile euq_inc_hh [aw=dwt] if year == `yr' & scenario == "`scen'", p(50)
         }
@@ -141,7 +174,7 @@ foreach yr of local years {
 
         post `h' (`yr') ("`scen'") (`median_val') (0.60 * `median_val')
 
-        di "Year `yr', `scen': Median = " %9.2f `median_val' ", Threshold = " %9.2f (0.60 * `median_val')
+        di "Year `yr', `scen': Median (person-level) = " %9.2f `median_val' ", Threshold = " %9.2f (0.60 * `median_val')
     }
 }
 
@@ -150,10 +183,10 @@ restore
 
 merge m:1 year scenario using `thresholds', nogen keep(match)
 
-label variable idpovline60 "Poverty threshold (60% weighted median, year and scenario specific)"
-label variable median_euq "Median equivalized income (year and scenario specific)"
+label variable idpovline60 "Poverty threshold (60% person-weighted median, scenario-specific)"
+label variable median_euq "Median equivalized income (person-level, scenario-specific)"
 
-di _n "=== Thresholds merged ===" _n
+di _n "=== Person-level thresholds merged ===" _n
 di _n "=== This may take up to 15 minutes ===" _n
 
 ***************************************
@@ -390,7 +423,7 @@ di _n "=== Exporting to Excel ===" _n
 
 capture mkdir "$output"
 
-capture export excel "$output/overall_poverty_analysis.xlsx", replace sheet("Overall_Poverty") firstrow(variables)
+capture export excel "$output/overall_poverty_analysis_Rstyle.xlsx", replace sheet("Overall_Poverty") firstrow(variables)
 
 if _rc == 603 {
     di as error "ERROR: Cannot save Excel file!"
@@ -398,16 +431,22 @@ if _rc == 603 {
     di as error "Attempting alternative filename..."
 
     local timestamp = clock("`c(current_date)' `c(current_time)'", "DMYhms")
-    export excel "$output/overall_poverty_analysis_`timestamp'.xlsx", replace sheet("Overall_Poverty") firstrow(variables)
+    export excel "$output/overall_poverty_analysis_Rstyle_`timestamp'.xlsx", replace sheet("Overall_Poverty") firstrow(variables)
 
-    di as result "File saved as: overall_poverty_analysis_`timestamp'.xlsx"
+    di as result "File saved as: overall_poverty_analysis_Rstyle_`timestamp'.xlsx"
 }
 else {
     di as result "File saved successfully!"
 }
 
 di _n "==============================================================================="
-di "ANALYSIS COMPLETE"
+di "ANALYSIS COMPLETE - R-STYLE VERSION"
 di "==============================================================================="
-di "Results saved in: $output/overall_poverty_analysis.xlsx"
+di "KEY CHANGES TO MATCH R CODE:"
+di "  1. Median calculated on PERSON level (not household level)"
+di "  2. Reference person = first person per HH with age >= 14 (no age sorting)"
+di "  3. Threshold calculated separately for each scenario"
 di "==============================================================================="
+di "Results saved in: $output/overall_poverty_analysis_Rstyle.xlsx"
+di "==============================================================================="
+
