@@ -3,17 +3,16 @@
 *** Master Thesis Socioeconomics, Uni Wien
 *** Version: V1
 *** Date: 12.12.2024
-*** Aim: Overall poverty rate calculation (60% median threshold, after mean tested benefits on household level)
+*** Aim: Overall poverty rate calculation (60% median threshold, after means tested benefits on household level)
+*** Note: Poverty threshold is recalculated for each year and each scenario
 *******************************************************************************************************************************************************************************************
 
 clear all
 set more off
 
-* Set local paths
 use "C:\Users\ALochbih\OneDrive - Bundesarbeitskammer\Desktop\EUROMOD\InWorkPoverty\Stata\Policy_V1_MA_AllYears.dta"
 global output "C:/Users/anna/Desktop/Ergebnisse"
 
-* Define years and scenarios
 local years "2015 2016 2017 2018 2019 2020 2021 2022"
 local scenarios "factual v1 v2 v3 v4 v5 v6 v7 v8 v9 v10"
 
@@ -23,7 +22,6 @@ di _n "=== Original observations: " _N " ===" _n
 * STRING TO NUMERIC CONVERSION (comma to dot)
 ***********************************************
 
-* List of relevant variables to convert
 local numeric_vars "ils_dispy dwt dag"
 
 foreach var of local numeric_vars {
@@ -45,6 +43,7 @@ foreach var of local numeric_vars {
 **********************************
 * Check if ils_dispy exists
 **********************************
+
 capture confirm variable ils_dispy
 if _rc != 0 {
     di as error "ERROR: Variable ils_dispy not found in dataset!"
@@ -56,14 +55,13 @@ if _rc != 0 {
 **********************************
 * Renaming variables for clarity
 **********************************
+
 rename dag age
 label variable age "Age"
 
-* Create ind_disp_inc from ils_dispy
 gen ind_disp_inc = ils_dispy
 label variable ind_disp_inc "Individual disposable income (from ils_dispy)"
 
-* Drop old euq_inc_hh if it exists
 capture drop euq_inc_hh
 
 di _n "Variables prepared successfully" _n
@@ -109,59 +107,51 @@ di "Equivalized household income calculated"
 di "Total observations: " _N
 
 ****************************************
-* Calculate poverty threshold
+* Calculate poverty threshold per year and scenario
 ****************************************
 
-di _n "=== Calculating poverty thresholds (FACTUAL ONLY) ===" _n
+di _n "=== Calculating poverty thresholds (year and scenario specific) ===" _n
 
 capture confirm variable dwt
 local has_weights = (_rc == 0)
 
-* Calculate thresholds using preserve/restore
 preserve
 
-* Keep one observation per household
 bysort year scenario idhh: keep if _n == 1
-
 di "Calculating thresholds on " _N " households"
 
-* Calculate median ONLY for factual scenario
-gen median_euq = .
-gen idpovline60 = .
+tempfile thresholds
+tempname h
+postfile `h' int year str20 scenario double median_euq idpovline60 using `thresholds', replace
 
 foreach yr of local years {
-    capture {
+    foreach scen of local scenarios {
+
+        quietly count if year == `yr' & scenario == "`scen'"
+        if r(N) == 0 continue
+
         if `has_weights' {
-            quietly _pctile euq_inc_hh [aw=dwt] if year == `yr' & scenario == "factual", p(50)
+            quietly _pctile euq_inc_hh [aw=dwt] if year == `yr' & scenario == "`scen'", p(50)
         }
         else {
-            quietly _pctile euq_inc_hh if year == `yr' & scenario == "factual", p(50)
+            quietly _pctile euq_inc_hh if year == `yr' & scenario == "`scen'", p(50)
         }
+
         local median_val = r(r1)
-        
-        * Apply this threshold to ALL scenarios for this year
-        quietly replace median_euq = `median_val' if year == `yr'
-        quietly replace idpovline60 = 0.60 * `median_val' if year == `yr'
-        
-        di "Year `yr': Median (factual) = " %9.2f `median_val' ", Threshold = " %9.2f (0.60 * `median_val') " (applied to all scenarios)"
+
+        post `h' (`yr') ("`scen'") (`median_val') (0.60 * `median_val')
+
+        di "Year `yr', `scen': Median = " %9.2f `median_val' ", Threshold = " %9.2f (0.60 * `median_val')
     }
 }
 
-* Keep only year-scenario-threshold combinations
-keep year scenario median_euq idpovline60
-duplicates drop
-
-* Save thresholds
-tempfile thresholds
-save `thresholds', replace
-
+postclose `h'
 restore
 
-* Merge thresholds to individual data
 merge m:1 year scenario using `thresholds', nogen keep(match)
 
-label variable idpovline60 "Poverty threshold (60% weighted median of factual)"
-label variable median_euq "Median equivalized income (factual)"
+label variable idpovline60 "Poverty threshold (60% weighted median, year and scenario specific)"
+label variable median_euq "Median equivalized income (year and scenario specific)"
 
 di _n "=== Thresholds merged ===" _n
 di _n "=== This may take up to 15 minutes ===" _n
@@ -169,19 +159,18 @@ di _n "=== This may take up to 15 minutes ===" _n
 ***************************************
 * Identify poverty status
 ***************************************
+
 di _n "=== Identifying poverty status ===" _n
 
 gen poor = (euq_inc_hh < idpovline60)
 label variable poor "At risk of poverty"
 
-* Calculate poverty gaps for all poor individuals
 gen pov_gap_abs = idpovline60 - euq_inc_hh if poor == 1
-label variable pov_gap_abs "Poverty gap absolute (€)"
+label variable pov_gap_abs "Poverty gap absolute (Euro)"
 
 gen pov_gap_rel = ((idpovline60 - euq_inc_hh) / idpovline60) * 100 if poor == 1
-label variable pov_gap_rel "Poverty gap relative (%)"
+label variable pov_gap_rel "Poverty gap relative (Percent)"
 
-* Create age group variable for additional analysis
 gen age_group = .
 replace age_group = 1 if age < 18
 replace age_group = 2 if age >= 18 & age < 65
@@ -199,19 +188,14 @@ di "Total observations: " _N
 di _n "=== Calculating statistics by year and scenario ===" _n
 
 if `has_weights' {
-    collapse (mean) poverty_rate=poor avg_pov_gap_abs=pov_gap_abs avg_pov_gap_rel=pov_gap_rel poverty_line=idpovline60 mean_euq_inc=euq_inc_hh (sum) n_poor=poor n_total=dwt [aw=dwt], by(year scenario)
+    collapse (mean) poverty_rate=poor avg_pov_gap_abs=pov_gap_abs avg_pov_gap_rel=pov_gap_rel poverty_line=idpovline60 mean_euq_inc=euq_inc_hh median_euq_inc=median_euq (sum) n_poor=poor n_total=dwt [aw=dwt], by(year scenario)
 }
 else {
-    collapse (mean) poverty_rate=poor avg_pov_gap_abs=pov_gap_abs avg_pov_gap_rel=pov_gap_rel poverty_line=idpovline60 mean_euq_inc=euq_inc_hh (sum) n_poor=poor, by(year scenario)
+    collapse (mean) poverty_rate=poor avg_pov_gap_abs=pov_gap_abs avg_pov_gap_rel=pov_gap_rel poverty_line=idpovline60 mean_euq_inc=euq_inc_hh median_euq_inc=median_euq (sum) n_poor=poor, by(year scenario)
     gen n_total = _N
 }
 
-* Convert poverty rate to percentage
 replace poverty_rate = poverty_rate * 100
-
-* Merge back the proper median
-merge m:1 year scenario using `thresholds', nogen keep(match)
-rename median_euq median_euq_inc
 
 **********************
 * Reshape wide format
@@ -221,12 +205,11 @@ di _n "=== Reshaping to wide format ===" _n
 
 reshape wide poverty_rate n_poor n_total avg_pov_gap_abs avg_pov_gap_rel poverty_line mean_euq_inc median_euq_inc, i(year) j(scenario) string
 
-* Order scenarios
-order year *factual *v1 *v2 *v3 *v4 *v5 *v6 *v7 *v8 *v9 *v10
-
 sort year
 
-* Save wide data
+ds year, not
+order year `r(varlist)'
+
 tempfile wide_data
 save `wide_data', replace
 
@@ -234,7 +217,7 @@ save `wide_data', replace
 * CREATE FORMATTED OUTPUT WITH ALL YEARS STACKED
 *===============================================================================
 
-di _n "=== Creating Excel-ready output with % changes ===" _n
+di _n "=== Creating Excel ready output with percent changes ===" _n
 
 clear
 local total_rows = 150
@@ -242,65 +225,61 @@ set obs `total_rows'
 
 gen str50 Variable = ""
 
-* Create columns for each scenario
 foreach scen in factual v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
     gen `scen' = .
 }
 
 local row = 1
 
-* Fill in data for each year
 foreach yr of local years {
-    
+
     preserve
     use `wide_data', clear
     count if year == `yr'
     local year_exists = r(N)
-    
+
     if `year_exists' > 0 {
-        
-        * Extract values for each scenario
+
         foreach scen in factual v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+
             sum poverty_rate`scen' if year == `yr', meanonly
             local pov_`scen' = r(mean)
-            
+
             sum n_poor`scen' if year == `yr', meanonly
             local npoor_`scen' = r(mean)
-            
+
             sum n_total`scen' if year == `yr', meanonly
             local ntotal_`scen' = r(mean)
-            
+
             sum avg_pov_gap_abs`scen' if year == `yr', meanonly
             local gap_abs_`scen' = r(mean)
-            
+
             sum avg_pov_gap_rel`scen' if year == `yr', meanonly
             local gap_rel_`scen' = r(mean)
-            
+
             sum poverty_line`scen' if year == `yr', meanonly
             local povline_`scen' = r(mean)
-            
+
             sum mean_euq_inc`scen' if year == `yr', meanonly
             local mean_inc_`scen' = r(mean)
-            
+
             sum median_euq_inc`scen' if year == `yr', meanonly
             local median_inc_`scen' = r(mean)
         }
-        
+
         restore
-        
-        * Fill in rows for this year
+
         local row = `row' + 2
         replace Variable = "Austria `yr'" in `row'
         local row = `row' + 1
-        
-        * 1. Poverty rate (with change)
+
         replace Variable = "Poverty rate (%)" in `row'
         foreach scen in factual v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
             replace `scen' = `pov_`scen'' in `row'
         }
         local row = `row' + 1
-        
-        replace Variable = "  → % change from factual" in `row'
+
+        replace Variable = "  percent change from factual" in `row'
         replace factual = . in `row'
         foreach scen in v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
             if `pov_factual' != 0 & `pov_factual' != . {
@@ -309,37 +288,32 @@ foreach yr of local years {
             }
         }
         local row = `row' + 1
-        
-        * 2. Total population
+
         replace Variable = "Total population" in `row'
         foreach scen in factual v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
             replace `scen' = `ntotal_`scen'' in `row'
         }
         local row = `row' + 1
-        
-        * 3. Poverty line
-        replace Variable = "Poverty line (€)" in `row'
+
+        replace Variable = "Poverty line (Euro)" in `row'
         foreach scen in factual v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
             replace `scen' = `povline_`scen'' in `row'
         }
         local row = `row' + 1
-        
-        * 4. Median equiv. income
-        replace Variable = "Median equiv. income (€)" in `row'
+
+        replace Variable = "Median equiv. income (Euro)" in `row'
         foreach scen in factual v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
             replace `scen' = `median_inc_`scen'' in `row'
         }
         local row = `row' + 1
-        
-        * 5. Number poor
+
         replace Variable = "Number poor" in `row'
         foreach scen in factual v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
             replace `scen' = `npoor_`scen'' in `row'
         }
         local row = `row' + 1
-        
-        * 6. Number poor % change
-        replace Variable = "  → % change from factual" in `row'
+
+        replace Variable = "  percent change from factual" in `row'
         replace factual = . in `row'
         foreach scen in v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
             if `npoor_factual' != 0 & `npoor_factual' != . {
@@ -348,16 +322,14 @@ foreach yr of local years {
             }
         }
         local row = `row' + 1
-        
-        * 7. Avg poverty gap (€)
-        replace Variable = "Avg poverty gap (€)" in `row'
+
+        replace Variable = "Avg poverty gap (Euro)" in `row'
         foreach scen in factual v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
             replace `scen' = `gap_abs_`scen'' in `row'
         }
         local row = `row' + 1
-        
-        * 8. Avg poverty gap (€) % change
-        replace Variable = "  → % change from factual" in `row'
+
+        replace Variable = "  percent change from factual" in `row'
         replace factual = . in `row'
         foreach scen in v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
             if `gap_abs_factual' != 0 & `gap_abs_factual' != . {
@@ -366,25 +338,22 @@ foreach yr of local years {
             }
         }
         local row = `row' + 1
-        
-        * 9. Avg poverty gap (%)
-        replace Variable = "Avg poverty gap (%)" in `row'
+
+        replace Variable = "Avg poverty gap (Percent)" in `row'
         foreach scen in factual v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
             replace `scen' = `gap_rel_`scen'' in `row'
         }
         local row = `row' + 1
-        
-        * 10. Avg poverty gap (%) - change in percentage points
-        replace Variable = "  → change in pp" in `row'
+
+        replace Variable = "  change in percentage points" in `row'
         replace factual = . in `row'
         foreach scen in v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
             local pp_change = `gap_rel_`scen'' - `gap_rel_factual'
             replace `scen' = `pp_change' in `row'
         }
         local row = `row' + 1
-        
-        * 11. Avg poverty gap (%) - % change
-        replace Variable = "  → % change from factual" in `row'
+
+        replace Variable = "  percent change from factual" in `row'
         replace factual = . in `row'
         foreach scen in v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
             if `gap_rel_factual' != 0 & `gap_rel_factual' != . {
@@ -393,16 +362,14 @@ foreach yr of local years {
             }
         }
         local row = `row' + 1
-        
-        * 12. Mean equiv. income (€)
-        replace Variable = "Mean equiv. income (€)" in `row'
+
+        replace Variable = "Mean equiv. income (Euro)" in `row'
         foreach scen in factual v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
             replace `scen' = `mean_inc_`scen'' in `row'
         }
         local row = `row' + 1
-        
-        * 13. Mean equiv. income (€) % change
-        replace Variable = "  → % change from factual" in `row'
+
+        replace Variable = "  percent change from factual" in `row'
         replace factual = . in `row'
         foreach scen in v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
             if `mean_inc_factual' != 0 & `mean_inc_factual' != . {
@@ -417,30 +384,22 @@ foreach yr of local years {
     }
 }
 
-* Keep only filled rows
 keep if Variable != ""
-
-*===============================================================================
-* EXPORT TO EXCEL
-*===============================================================================
 
 di _n "=== Exporting to Excel ===" _n
 
-* Create output directory
 capture mkdir "$output"
 
-* Close any potentially open Excel files and export
 capture export excel "$output/overall_poverty_analysis.xlsx", replace sheet("Overall_Poverty") firstrow(variables)
 
 if _rc == 603 {
     di as error "ERROR: Cannot save Excel file!"
     di as error "The file might be open in Excel. Please close it and try again."
     di as error "Attempting alternative filename..."
-    
-    * Try with timestamp
+
     local timestamp = clock("`c(current_date)' `c(current_time)'", "DMYhms")
     export excel "$output/overall_poverty_analysis_`timestamp'.xlsx", replace sheet("Overall_Poverty") firstrow(variables)
-    
+
     di as result "File saved as: overall_poverty_analysis_`timestamp'.xlsx"
 }
 else {
