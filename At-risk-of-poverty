@@ -7,6 +7,7 @@
 *** Note: Poverty threshold is recalculated for each year and each scenario
 *******************************************************************************************************************************************************************************************
 
+
 clear all
 set more off
 
@@ -68,15 +69,15 @@ di _n "Variables prepared successfully" _n
 
 *************************************************************
 * CALCULATE EQUIVALIZED HOUSEHOLD INCOME (Modified OECD Scale)
-* CHANGED: Reference person = first person per HH with age >= 14
-*          NO sorting by age (like R code)
+* Matching R code exactly:
+*   ref_person=ifelse(row_number()==1&dag>=14,1,0)
+*   equ_oecd=case_when((dag>=14&ref_person==1)~1,
+*                      (dag>=14&ref_person!=1)~0.5,
+*                      dag<14~0.3)
 *************************************************************
 
 di _n "=== Calculating equivalized household income ===" _n
 di _n "=== Using R-style reference person (first person with age >= 14) ===" _n
-
-* IMPORTANT: Do NOT sort by age - keep original data order like R code
-* R code: ref_person=ifelse(row_number()==1&dag>=14,1,0)
 
 capture drop eq_weight
 capture drop ref_person
@@ -85,45 +86,43 @@ capture drop row_num
 * Generate row number within each household (preserving original order)
 bysort year scenario idhh: gen row_num = _n
 
-* Initialize eq_weight based on age
-gen eq_weight = .
-replace eq_weight = 0.3 if age < 14
-replace eq_weight = 0.5 if age >= 14
-
-* Reference person: first person in household with age >= 14
-* This matches R: ref_person=ifelse(row_number()==1&dag>=14,1,0)
-gen ref_person = (row_num == 1 & age >= 14)
-
-* First person with age >= 14 gets weight 1
-replace eq_weight = 1.0 if ref_person == 1
-
-* Handle case where first person is a child (age < 14)
-* Need to find the first adult in the household
+* Step 1: Find first adult (age >= 14) in each household
 bysort year scenario idhh: gen is_adult = (age >= 14)
 bysort year scenario idhh: gen adult_cumsum = sum(is_adult)
-gen first_adult_in_hh = (is_adult == 1 & adult_cumsum == 1)
+gen ref_person = (is_adult == 1 & adult_cumsum == 1)
 
-* If first person was a child, the first adult gets weight 1
-replace eq_weight = 1.0 if first_adult_in_hh == 1 & ref_person == 0
+* Step 2: Assign equivalence weights (Modified OECD Scale)
+gen eq_weight = .
 
-* Clean up
-drop row_num is_adult adult_cumsum first_adult_in_hh
+* First: Check if first adult in household -> weight 1
+replace eq_weight = 1.0 if ref_person == 1
 
-label variable ref_person "Reference person (first person with age >= 14, R-style)"
+* Second: Other adults get weight 0.5
+replace eq_weight = 0.5 if age >= 14 & ref_person == 0
+
+* Third: Children get weight 0.3
+replace eq_weight = 0.3 if age < 14
+
+drop row_num
+
+label variable ref_person "Reference person (row 1 AND age >= 14, R-style)"
 label variable eq_weight "Equivalence weight (Modified OECD, R-style)"
 
+* R: ses=sum(equ_oecd)
 capture drop hh_eqfac
 bysort year scenario idhh: egen hh_eqfac = total(eq_weight)
 label variable hh_eqfac "Household equivalence factor (Modified OECD)"
 
-di "Equivalence factors calculated (R-style: first person with age >= 14)"
+di "Equivalence factors calculated (R-style)"
 
+* R: ils_dispy_hh=sum(ils_dispy)
 capture drop hh_disp_inc
 bysort year scenario idhh: egen hh_disp_inc = total(ind_disp_inc)
 label variable hh_disp_inc "Total household disposable income"
 
 di "Household incomes summed"
 
+* R: ils_dispy_ses=ils_dispy_hh/ses
 capture drop euq_inc_hh
 gen euq_inc_hh = hh_disp_inc / hh_eqfac
 label variable euq_inc_hh "Equivalized household disposable income (calculated)"
@@ -135,7 +134,8 @@ di "Total observations: " _N
 
 ****************************************
 * Calculate poverty threshold per year and scenario
-* CHANGED: Median on PERSON level (not household level) like R code
+* R: arop_rate=laeken::weightedMedian(ils_dispy_ses,dwt)*.6
+* Using pweight for weighted median (like R)
 ****************************************
 
 di _n "=== Calculating poverty thresholds (PERSON level, like R code) ===" _n
@@ -143,13 +143,8 @@ di _n "=== Calculating poverty thresholds (PERSON level, like R code) ===" _n
 capture confirm variable dwt
 local has_weights = (_rc == 0)
 
-* IMPORTANT: Do NOT reduce to household level - calculate median on PERSON level
-* R code: arop_rate=laeken::weightedMedian(ils_dispy_ses,dwt)*.6
-* This means all persons contribute to the median with their equivalized HH income
-
 preserve
 
-* Keep ALL persons (not just one per household) - this is the key difference!
 di "Calculating thresholds on " _N " persons (person-level median like R)"
 
 tempfile thresholds
@@ -162,9 +157,10 @@ foreach yr of local years {
         quietly count if year == `yr' & scenario == "`scen'"
         if r(N) == 0 continue
 
-        * Calculate median on PERSON level (each person with their euq_inc_hh)
+        * Calculate weighted median like R: laeken::weightedMedian(ils_dispy_ses,dwt)
+        * Using pweight instead of aweight
         if `has_weights' {
-            quietly _pctile euq_inc_hh [aw=dwt] if year == `yr' & scenario == "`scen'", p(50)
+            quietly _pctile euq_inc_hh [pw=dwt] if year == `yr' & scenario == "`scen'", p(50)
         }
         else {
             quietly _pctile euq_inc_hh if year == `yr' & scenario == "`scen'", p(50)
@@ -174,7 +170,7 @@ foreach yr of local years {
 
         post `h' (`yr') ("`scen'") (`median_val') (0.60 * `median_val')
 
-        di "Year `yr', `scen': Median (person-level) = " %9.2f `median_val' ", Threshold = " %9.2f (0.60 * `median_val')
+        di "Year `yr', `scen': Median = " %9.2f `median_val' ", Threshold = " %9.2f (0.60 * `median_val')
     }
 }
 
@@ -183,11 +179,10 @@ restore
 
 merge m:1 year scenario using `thresholds', nogen keep(match)
 
-label variable idpovline60 "Poverty threshold (60% person-weighted median, scenario-specific)"
-label variable median_euq "Median equivalized income (person-level, scenario-specific)"
+label variable idpovline60 "Poverty threshold (60% weighted median, scenario-specific)"
+label variable median_euq "Median equivalized income (scenario-specific)"
 
-di _n "=== Person-level thresholds merged ===" _n
-di _n "=== This may take up to 15 minutes ===" _n
+di _n "=== Thresholds merged ===" _n
 
 ***************************************
 * Identify poverty status
@@ -195,6 +190,7 @@ di _n "=== This may take up to 15 minutes ===" _n
 
 di _n "=== Identifying poverty status ===" _n
 
+* R: arop_person=sum(ifelse(ils_dispy_ses<arop_rate,1,0)*dwt)
 gen poor = (euq_inc_hh < idpovline60)
 label variable poor "At risk of poverty"
 
@@ -204,31 +200,56 @@ label variable pov_gap_abs "Poverty gap absolute (Euro)"
 gen pov_gap_rel = ((idpovline60 - euq_inc_hh) / idpovline60) * 100 if poor == 1
 label variable pov_gap_rel "Poverty gap relative (Percent)"
 
-gen age_group = .
-replace age_group = 1 if age < 18
-replace age_group = 2 if age >= 18 & age < 65
-replace age_group = 3 if age >= 65
-label define age_lbl 1 "Children (<18)" 2 "Working age (18-64)" 3 "Elderly (65+)"
-label values age_group age_lbl
-
 di "Poverty status identified"
 di "Total observations: " _N
 
 ***************************************
 * Overall poverty statistics
+* MANUAL CALCULATION like R code:
+* arop_person=sum(ifelse(ils_dispy_ses<arop_rate,1,0)*dwt)
+* arop_quota=arop_person/sum(dwt)
 ***************************************
 
-di _n "=== Calculating statistics by year and scenario ===" _n
+di _n "=== Calculating statistics by year and scenario (R-style manual weighting) ===" _n
 
-if `has_weights' {
-    collapse (mean) poverty_rate=poor avg_pov_gap_abs=pov_gap_abs avg_pov_gap_rel=pov_gap_rel poverty_line=idpovline60 mean_euq_inc=euq_inc_hh median_euq_inc=median_euq (sum) n_poor=poor n_total=dwt [aw=dwt], by(year scenario)
-}
-else {
-    collapse (mean) poverty_rate=poor avg_pov_gap_abs=pov_gap_abs avg_pov_gap_rel=pov_gap_rel poverty_line=idpovline60 mean_euq_inc=euq_inc_hh median_euq_inc=median_euq (sum) n_poor=poor, by(year scenario)
-    gen n_total = _N
-}
+* Create weighted variables for manual calculation like R
+gen poor_x_dwt = poor * dwt
+gen pov_gap_abs_x_dwt = pov_gap_abs * dwt if poor == 1
+gen pov_gap_rel_x_dwt = pov_gap_rel * dwt if poor == 1
+gen euq_inc_x_dwt = euq_inc_hh * dwt
 
-replace poverty_rate = poverty_rate * 100
+* Count poor persons for gap calculation
+gen poor_dwt_for_gap = dwt if poor == 1
+
+* Collapse with SUM (manual weighting like R)
+* n_poor should be weighted: sum(poor * dwt) = poor_x_dwt
+collapse (sum) poor_x_dwt=poor_x_dwt total_dwt=dwt pov_gap_abs_sum=pov_gap_abs_x_dwt pov_gap_rel_sum=pov_gap_rel_x_dwt poor_dwt_sum=poor_dwt_for_gap euq_inc_sum=euq_inc_x_dwt (firstnm) poverty_line=idpovline60 median_euq_inc=median_euq, by(year scenario)
+
+* Calculate rates manually like R: arop_quota=arop_person/sum(dwt)
+gen poverty_rate = (poor_x_dwt / total_dwt) * 100
+label variable poverty_rate "Poverty rate (%, R-style calculation)"
+
+* Number of poor (weighted) = arop_person in R = sum(poor * dwt)
+gen n_poor = poor_x_dwt
+label variable n_poor "Number of poor (weighted, = sum(poor*dwt))"
+
+* Average poverty gaps (among poor only)
+gen avg_pov_gap_abs = pov_gap_abs_sum / poor_dwt_sum
+label variable avg_pov_gap_abs "Avg poverty gap absolute (Euro)"
+
+gen avg_pov_gap_rel = pov_gap_rel_sum / poor_dwt_sum
+label variable avg_pov_gap_rel "Avg poverty gap relative (%)"
+
+* Mean equivalized income
+gen mean_euq_inc = euq_inc_sum / total_dwt
+label variable mean_euq_inc "Mean equiv. income (Euro)"
+
+* Total population (weighted)
+gen n_total = total_dwt
+label variable n_total "Total population (weighted)"
+
+* Clean up
+drop poor_x_dwt pov_gap_abs_sum pov_gap_rel_sum poor_dwt_sum euq_inc_sum total_dwt
 
 **********************
 * Reshape wide format
@@ -423,7 +444,7 @@ di _n "=== Exporting to Excel ===" _n
 
 capture mkdir "$output"
 
-capture export excel "$output/overall_poverty_analysis_Rstyle.xlsx", replace sheet("Overall_Poverty") firstrow(variables)
+capture export excel "$output/overall_poverty_analysis_Rstyle_v6.xlsx", replace sheet("Overall_Poverty") firstrow(variables)
 
 if _rc == 603 {
     di as error "ERROR: Cannot save Excel file!"
@@ -431,22 +452,22 @@ if _rc == 603 {
     di as error "Attempting alternative filename..."
 
     local timestamp = clock("`c(current_date)' `c(current_time)'", "DMYhms")
-    export excel "$output/overall_poverty_analysis_Rstyle_`timestamp'.xlsx", replace sheet("Overall_Poverty") firstrow(variables)
+    export excel "$output/overall_poverty_analysis_Rstyle_v6_`timestamp'.xlsx", replace sheet("Overall_Poverty") firstrow(variables)
 
-    di as result "File saved as: overall_poverty_analysis_Rstyle_`timestamp'.xlsx"
+    di as result "File saved as: overall_poverty_analysis_Rstyle_v6_`timestamp'.xlsx"
 }
 else {
     di as result "File saved successfully!"
 }
 
 di _n "==============================================================================="
-di "ANALYSIS COMPLETE - R-STYLE VERSION"
+di "ANALYSIS COMPLETE - R-STYLE VERSION V6"
 di "==============================================================================="
-di "KEY CHANGES TO MATCH R CODE:"
-di "  1. Median calculated on PERSON level (not household level)"
-di "  2. Reference person = first person per HH with age >= 14 (no age sorting)"
-di "  3. Threshold calculated separately for each scenario"
+di "MATCHING R CODE EXACTLY:"
+di "  1. Median on PERSON level with pweight"
+di "  2. ref_person = 1 ONLY if row_number()==1 AND age>=14"
+di "  3. Manual weighting: poverty_rate = sum(poor*dwt) / sum(dwt)"
+di "  4. Threshold calculated separately for each scenario"
 di "==============================================================================="
-di "Results saved in: $output/overall_poverty_analysis_Rstyle.xlsx"
+di "Results saved in: $output/overall_poverty_analysis_Rstyle_v6.xlsx"
 di "==============================================================================="
-
