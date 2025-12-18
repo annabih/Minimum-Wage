@@ -69,11 +69,6 @@ di _n "Variables prepared successfully" _n
 
 *************************************************************
 * CALCULATE EQUIVALIZED HOUSEHOLD INCOME (Modified OECD Scale)
-* Matching R code exactly:
-*   ref_person=ifelse(row_number()==1&dag>=14,1,0)
-*   equ_oecd=case_when((dag>=14&ref_person==1)~1,
-*                      (dag>=14&ref_person!=1)~0.5,
-*                      dag<14~0.3)
 *************************************************************
 
 di _n "=== Calculating equivalized household income ===" _n
@@ -103,123 +98,75 @@ replace eq_weight = 0.5 if age >= 14 & ref_person == 0
 * Third: Children get weight 0.3
 replace eq_weight = 0.3 if age < 14
 
-drop row_num
+label variable ref_person "Reference person (row 1 AND age >= 14,)"
+label variable eq_weight "Equivalence weight (Modified OECD)"
 
-label variable ref_person "Reference person (row 1 AND age >= 14, R-style)"
-label variable eq_weight "Equivalence weight (Modified OECD, R-style)"
+* Creat household equivalent weigths
+bysort year scenario idhh: egen hh_eq_weight = total(eq_weight)
+label variable hh_eq_weight "Household equivalence factor (OECD)"
 
-* R: ses=sum(equ_oecd)
-capture drop hh_eqfac
-bysort year scenario idhh: egen hh_eqfac = total(eq_weight)
-label variable hh_eqfac "Household equivalence factor (Modified OECD)"
+* Creat household disposabel income
+bysort year scenario idhh: egen hh_ils_dispy = total(ils_dispy)
+label variable hh_ils_dispy "Total household disposable income"
 
-di "Equivalence factors calculated (R-style)"
-
-* R: ils_dispy_hh=sum(ils_dispy)
-capture drop hh_disp_inc
-bysort year scenario idhh: egen hh_disp_inc = total(ind_disp_inc)
-label variable hh_disp_inc "Total household disposable income"
-
-di "Household incomes summed"
-
-* R: ils_dispy_ses=ils_dispy_hh/ses
-capture drop euq_inc_hh
-gen euq_inc_hh = hh_disp_inc / hh_eqfac
-label variable euq_inc_hh "Equivalized household disposable income (calculated)"
-
-keep if euq_inc_hh != . & euq_inc_hh >= 0
-
-di "Equivalized household income calculated"
-di "Total observations: " _N
+* Create equalized disposable household income
+gen eq_hh_ils_dispy = hh_ils_dispy / hh_eq_weight
+label variable eq_hh_ils_dispy "Equivalized household disposable income"
 
 ****************************************
 * Calculate poverty threshold per year and scenario
-* R: arop_rate=laeken::weightedMedian(ils_dispy_ses,dwt)*.6
-* Using pweight for weighted median (like R)
 ****************************************
-
-di _n "=== Calculating poverty thresholds (PERSON level, like R code) ===" _n
-
-capture confirm variable dwt
-local has_weights = (_rc == 0)
-
-preserve
-
-di "Calculating thresholds on " _N " persons (person-level median like R)"
-
 tempfile thresholds
 tempname h
-postfile `h' int year str20 scenario double median_euq idpovline60 using `thresholds', replace
+
+postfile `h' int year str10 scenario double median_eq_hh_ils_dispy pov_threshold_60 using `thresholds', replace
 
 foreach yr of local years {
     foreach scen of local scenarios {
 
-        quietly count if year == `yr' & scenario == "`scen'"
-        if r(N) == 0 continue
+        quietly count if year==`yr' & scenario=="`scen'"
+        if r(N)==0 continue
 
-        * Calculate weighted median like R: laeken::weightedMedian(ils_dispy_ses,dwt)
-        * Using pweight instead of aweight
-        if `has_weights' {
-            quietly _pctile euq_inc_hh [pw=dwt] if year == `yr' & scenario == "`scen'", p(50)
-        }
-        else {
-            quietly _pctile euq_inc_hh if year == `yr' & scenario == "`scen'", p(50)
-        }
-
+        quietly _pctile eq_hh_ils_dispy [pw=dwt] if year==`yr' & scenario=="`scen'", p(50)
         local median_val = r(r1)
 
-        post `h' (`yr') ("`scen'") (`median_val') (0.60 * `median_val')
-
-        di "Year `yr', `scen': Median = " %9.2f `median_val' ", Threshold = " %9.2f (0.60 * `median_val')
+        post `h' (`yr') ("`scen'") (`median_val') (0.60*`median_val')
+        di "Year `yr' `scen' Median=" %12.2f `median_val' " Threshold=" %12.2f (0.60*`median_val')
     }
 }
 
 postclose `h'
-restore
 
-merge m:1 year scenario using `thresholds', nogen keep(match)
+****************************************
+* Merge thresholds back to micro data
+****************************************
+merge m:1 year scenario using `thresholds', nogen
 
-label variable idpovline60 "Poverty threshold (60% weighted median, scenario-specific)"
-label variable median_euq "Median equivalized income (scenario-specific)"
+* ****************************************
+* Generate poverty status (individual level)
+* ****************************************
+* Generate at risk of poverty variable
+gen byte arop = .
+replace arop = 1 if eq_hh_ils_dispy < pov_threshold_60 & !missing(pov_threshold_60)
+replace arop = 0 if eq_hh_ils_dispy >= pov_threshold_60 & !missing(pov_threshold_60)
+label variable arop "At-risk-of-poverty (60% median eq HH disposable income)"
 
-di _n "=== Thresholds merged ===" _n
+* Generate arop gap absolut
+gen double arop_gap_abs = .
+replace arop_gap_abs = pov_threshold_60 - eq_hh_ils_dispy if arop == 1
+label variable arop_gap_abs "Poverty gap absolute (eq HH disposable income)"
 
-***************************************
-* Identify poverty status
-***************************************
-
-di _n "=== Identifying poverty status ===" _n
-
-* R: arop_person=sum(ifelse(ils_dispy_ses<arop_rate,1,0)*dwt)
-gen poor = (euq_inc_hh < idpovline60)
-label variable poor "At risk of poverty"
-
-gen pov_gap_abs = idpovline60 - euq_inc_hh if poor == 1
-label variable pov_gap_abs "Poverty gap absolute (Euro)"
-
-gen pov_gap_rel = ((idpovline60 - euq_inc_hh) / idpovline60) * 100 if poor == 1
-label variable pov_gap_rel "Poverty gap relative (Percent)"
-
-di "Poverty status identified"
-di "Total observations: " _N
+* Generate arop gap %
+gen double arop_gap_rel = .
+replace arop_gap_rel = ((pov_threshold_60 - eq_hh_ils_dispy) / pov_threshold_60) * 100 if arop == 1
+label variable arop_gap_rel "Relative poverty gap (% of 60% median eq HH income)"
 
 ***************************************
 * Overall poverty statistics
-* MANUAL CALCULATION like R code:
-* arop_person=sum(ifelse(ils_dispy_ses<arop_rate,1,0)*dwt)
-* arop_quota=arop_person/sum(dwt)
 ***************************************
+* AROP rate per year and scenario
 
-di _n "=== Calculating statistics by year and scenario (R-style manual weighting) ===" _n
 
-* Create weighted variables for manual calculation like R
-gen poor_x_dwt = poor * dwt
-gen pov_gap_abs_x_dwt = pov_gap_abs * dwt if poor == 1
-gen pov_gap_rel_x_dwt = pov_gap_rel * dwt if poor == 1
-gen euq_inc_x_dwt = euq_inc_hh * dwt
-
-* Count poor persons for gap calculation
-gen poor_dwt_for_gap = dwt if poor == 1
 
 * Collapse with SUM (manual weighting like R)
 * n_poor should be weighted: sum(poor * dwt) = poor_x_dwt
