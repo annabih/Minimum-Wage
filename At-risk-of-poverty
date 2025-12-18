@@ -9,7 +9,7 @@ clear all
 set more off
 
 use "C:\Users\ALochbih\OneDrive - Bundesarbeitskammer\Desktop\EUROMOD\InWorkPoverty\Stata\Policy_V1_MA_AllYears.dta"
-global output "C:/Users/anna/Desktop/Ergebnisse"
+global output "C:\Users\ALochbih\OneDrive - Bundesarbeitskammer\Desktop\EUROMOD\InWorkPoverty\Ergebnisse"
 
 local years "2015 2016 2017 2018 2019 2020 2021 2022"
 local scenarios "factual v1 v2 v3 v4 v5 v6 v7 v8 v9 v10"
@@ -382,6 +382,11 @@ foreach yr of local years {
 
 keep if Variable != ""
 
+* Format all numeric variables to show 4 decimal places
+foreach scen in factual v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+    format `scen' %15.4f
+}
+
 di _n "=== Exporting to Excel ===" _n
 
 capture mkdir "$output"
@@ -403,16 +408,5 @@ else {
 }
 
 di _n "==============================================================================="
-di "ANALYSIS COMPLETE - V1 VERSION (COMPLETE)"
+di "ANALYSIS COMPLETE"
 di "==============================================================================="
-di "Using V1 methodology:"
-di "  1. First adult (age >= 14) in household is reference person (weight 1.0)"
-di "  2. Other adults get weight 0.5"
-di "  3. Children (<14) get weight 0.3"
-di "  4. Median calculated with [pw=dwt]"
-di "  5. Threshold calculated separately for each scenario"
-di "==============================================================================="
-di "Results saved in: $output/overall_poverty_analysis_V1_complete.xlsx"
-di "Micro data saved in: $output/poverty_microdata_V1_complete.dta"
-di "==============================================================================="
-
