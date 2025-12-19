@@ -2,7 +2,7 @@
 *** Titel: AROP Analysis by Economic Status and Gender - EU-SILC Austria 2015-2023
 *** Date: 19.12.2024
 *** Aim: Overall poverty rate by economic status, gender, and combination
-*** Note: PL031 until 2019, PL032 from 2020 onwards
+*** Note: PL031 until 2020, PL032 from 2021 onwards, all economic status categories shown separately
 *******************************************************************************************************************************************************************************************
 clear all
 set more off
@@ -74,36 +74,31 @@ else {
     gen gender = .
 }
 
-* Economic status - Use PL031 for 2015-2019, PL032 for 2020-2023
-gen econ_status_raw = .
+* Economic status - Use PL031 for 2015-2020, PL032 for 2021-2023
+gen econ_status = .
 
 capture confirm variable PL031
 if _rc == 0 {
-    replace econ_status_raw = PL031 if year <= 2019 & !missing(PL031)
-    di "Using PL031 for years 2015-2019"
+    replace econ_status = PL031 if year <= 2020 & !missing(PL031)
+    di "Using PL031 for years 2015-2020"
 }
 
 capture confirm variable PL032
 if _rc == 0 {
-    replace econ_status_raw = PL032 if year >= 2020 & !missing(PL032)
-    di "Using PL032 for years 2020-2023"
+    replace econ_status = PL032 if year >= 2021 & !missing(PL032)
+    di "Using PL032 for years 2021-2023"
 }
 
-* Create simplified economic status categories
-gen econ_cat = .
-replace econ_cat = 1 if inlist(econ_status_raw, 1, 2)       
-replace econ_cat = 2 if econ_status_raw == 3                 
-replace econ_cat = 3 if econ_status_raw == 5               
-replace econ_cat = 4 if econ_status_raw == 4                 
-replace econ_cat = 5 if inlist(econ_status_raw, 6, 7, 8, 9) 
-
-label define econ_cat_lbl 1 "Working" 2 "Unemployed" 3 "Retired" 4 "Student" 5 "Other inactive"
-label values econ_cat econ_cat_lbl
-label variable econ_cat "Economic status (simplified)"
+* Label all economic status categories (1-9)
+label define econ_lbl 1 "Working full-time" 2 "Working part-time" 3 "Unemployed" ///
+                      4 "Student" 5 "Retired" 6 "Permanently disabled" ///
+                      7 "Military/community service" 8 "Domestic tasks" 9 "Other inactive"
+label values econ_status econ_lbl
+label variable econ_status "Economic status (detailed)"
 
 * Check distribution by year
 di _n "=== Economic status distribution by year ===" _n
-tab year econ_cat [aw=dwt], missing row
+tab year econ_status [aw=dwt], missing row
 
 * Equivalised disposable income
 gen eq_hh_ils_dispy = HX090
@@ -152,10 +147,10 @@ di "Total observations: " _N
 save "$output/arop_by_groups_microdata_SILC.dta", replace
 
 ***************************************
-* ANALYSIS 1: BY ECONOMIC STATUS
+* ANALYSIS 1: BY ECONOMIC STATUS (ALL 9 CATEGORIES)
 ***************************************
 
-di _n "=== Analysis 1: AROP by Economic Status ===" _n
+di _n "=== Analysis 1: AROP by Economic Status (all categories) ===" _n
 
 foreach yr of local years {
     quietly count if year == `yr'
@@ -166,28 +161,28 @@ foreach yr of local years {
     
     di "Processing year `yr'..."
     
-    forvalues ec = 1/5 {
-        quietly count if year == `yr' & econ_cat == `ec'
+    forvalues ec = 1/9 {
+        quietly count if year == `yr' & econ_status == `ec'
         if r(N) > 0 {
-            sum arop [aw=dwt] if year == `yr' & econ_cat == `ec'
+            sum arop [aw=dwt] if year == `yr' & econ_status == `ec'
             local arop_ec`ec'_`yr' = r(mean) * 100
             
-            sum dwt if year == `yr' & econ_cat == `ec'
+            sum dwt if year == `yr' & econ_status == `ec'
             local n_ec`ec'_`yr' = r(sum)
             
-            di "  Econ cat `ec': AROP=" %5.2f `arop_ec`ec'_`yr'' "%, N=" %12.0fc `n_ec`ec'_`yr''
+            di "  Econ status `ec': AROP=" %5.2f `arop_ec`ec'_`yr'' "%, N=" %12.0fc `n_ec`ec'_`yr''
         }
         else {
             local arop_ec`ec'_`yr' = .
             local n_ec`ec'_`yr' = .
-            di "  Econ cat `ec': No data"
+            di "  Econ status `ec': No data"
         }
     }
 }
 
 * Create output 1
 clear
-set obs 22
+set obs 40
 
 gen str50 Variable = ""
 foreach yr of local years {
@@ -196,13 +191,17 @@ foreach yr of local years {
 
 local row = 1
 
-forvalues ec = 1/5 {
+forvalues ec = 1/9 {
     
-    local ec_name "Working"
-    if `ec' == 2 local ec_name "Unemployed"
-    if `ec' == 3 local ec_name "Retired"
+    local ec_name "Working full-time"
+    if `ec' == 2 local ec_name "Working part-time"
+    if `ec' == 3 local ec_name "Unemployed"
     if `ec' == 4 local ec_name "Student"
-    if `ec' == 5 local ec_name "Other inactive"
+    if `ec' == 5 local ec_name "Retired"
+    if `ec' == 6 local ec_name "Permanently disabled"
+    if `ec' == 7 local ec_name "Military/community service"
+    if `ec' == 8 local ec_name "Domestic tasks"
+    if `ec' == 9 local ec_name "Other inactive"
     
     replace Variable = "=== `ec_name' ===" in `row'
     local row = `row' + 1
@@ -318,10 +317,10 @@ export excel "$output/AROP_GENDER_SILC.xlsx", replace sheet("By_Gender") firstro
 di "Analysis 2 saved: AROP_GENDER_SILC.xlsx"
 
 ***************************************
-* ANALYSIS 3: BY ECONOMIC STATUS AND GENDER
+* ANALYSIS 3: BY ECONOMIC STATUS AND GENDER (ALL 9 CATEGORIES)
 ***************************************
 
-di _n "=== Analysis 3: AROP by Economic Status and Gender ===" _n
+di _n "=== Analysis 3: AROP by Economic Status and Gender (all categories) ===" _n
 
 use "$output/arop_by_groups_microdata_SILC.dta", clear
 
@@ -331,14 +330,14 @@ foreach yr of local years {
     
     di "Processing year `yr'..."
     
-    forvalues ec = 1/5 {
+    forvalues ec = 1/9 {
         forvalues g = 1/2 {
-            quietly count if year == `yr' & econ_cat == `ec' & gender == `g'
+            quietly count if year == `yr' & econ_status == `ec' & gender == `g'
             if r(N) > 0 {
-                sum arop [aw=dwt] if year == `yr' & econ_cat == `ec' & gender == `g'
+                sum arop [aw=dwt] if year == `yr' & econ_status == `ec' & gender == `g'
                 local arop_ec`ec'g`g'_`yr' = r(mean) * 100
                 
-                sum dwt if year == `yr' & econ_cat == `ec' & gender == `g'
+                sum dwt if year == `yr' & econ_status == `ec' & gender == `g'
                 local n_ec`ec'g`g'_`yr' = r(sum)
             }
             else {
@@ -351,7 +350,7 @@ foreach yr of local years {
 
 * Create output 3
 clear
-set obs 35
+set obs 60
 
 gen str50 Variable = ""
 foreach yr of local years {
@@ -360,13 +359,17 @@ foreach yr of local years {
 
 local row = 1
 
-forvalues ec = 1/5 {
+forvalues ec = 1/9 {
     
-    local ec_name "Working"
-    if `ec' == 2 local ec_name "Unemployed"
-    if `ec' == 3 local ec_name "Retired"
+    local ec_name "Working full-time"
+    if `ec' == 2 local ec_name "Working part-time"
+    if `ec' == 3 local ec_name "Unemployed"
     if `ec' == 4 local ec_name "Student"
-    if `ec' == 5 local ec_name "Other inactive"
+    if `ec' == 5 local ec_name "Retired"
+    if `ec' == 6 local ec_name "Permanently disabled"
+    if `ec' == 7 local ec_name "Military/community service"
+    if `ec' == 8 local ec_name "Domestic tasks"
+    if `ec' == 9 local ec_name "Other inactive"
     
     replace Variable = "=== `ec_name' ===" in `row'
     local row = `row' + 1
@@ -410,11 +413,4 @@ di "Analysis 3 saved: AROP_ECONSTATUS_GENDER_SILC.xlsx"
 
 di _n "==============================================================================="
 di "ALL ANALYSES COMPLETE - EU-SILC"
-di "==============================================================================="
-di "Output files:"
-di "  1. arop_by_economic_status_SILC.xlsx"
-di "  2. arop_by_gender_SILC.xlsx"
-di "  3. arop_by_economic_status_and_gender_SILC.xlsx"
-di ""
-di "Note: Using PL031 for 2015-2019, PL032 for 2020-2023"
 di "==============================================================================="
