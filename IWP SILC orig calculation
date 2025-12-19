@@ -9,7 +9,7 @@ clear all
 set more off
 
 use "C:\Users\ALochbih\OneDrive - Bundesarbeitskammer\Desktop\EUROMOD\InWorkPoverty\Robustness\SILC_CrossSec_AllYears_2015_2023.dta"
-global output "C:\Users\ALochbih\OneDrive - Bundesarbeitskammer\Desktop\EUROMOD\InWorkPoverty\Robustness"
+global output "C:\Users\ALochbih\OneDrive - Bundesarbeitskammer\Desktop\EUROMOD\InWorkPoverty\Ergebnisse"
 
 local years "2015 2016 2017 2018 2019 2020 2021 2022 2023"
 
@@ -239,7 +239,7 @@ di "After worker filter (months > 6, age 18-64): " _N " observations"
 * Save micro-level data
 ***************************************
 
-save "$output/inwork_poverty_microdata_SILC_AllYears.dta", replace
+save "$output/IWP_SILC_ORIG.dta", replace
 di "Micro-level data saved"
 
 ***************************************
@@ -431,7 +431,7 @@ di _n "=== Exporting to Excel ===" _n
 
 capture mkdir "$output"
 
-export excel "$output/inwork_poverty_analysis_SILC_AllYears.xlsx", replace sheet("InWork_Poverty") firstrow(variables)
+export excel "$output/IWP_SILC_ORIG.xlsx", replace sheet("InWork_Poverty") firstrow(variables)
 
 di as result "File saved successfully!"
 
