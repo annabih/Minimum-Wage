@@ -1,0 +1,803 @@
+*******************************************************************************************************************************************************************************************
+*** Titel: AROP Analysis by Economic Status and Gender - EUROMOD 2015-2022
+*** Date: 19.12.2024
+*** Aim: Overall poverty rate by economic status, gender, and combination (with scenarios)
+*** Note: Economic status mapped to match SILC categories (PL031/PL032)
+*******************************************************************************************************************************************************************************************
+clear all
+set more off
+
+use "C:\Users\ALochbih\OneDrive - Bundesarbeitskammer\Desktop\EUROMOD\InWorkPoverty\Stata\Policy_V1_MA_AllYears.dta"
+global output "C:\Users\ALochbih\OneDrive - Bundesarbeitskammer\Desktop\EUROMOD\InWorkPoverty\Ergebnisse\Decomposed"
+
+local years "2015 2016 2017 2018 2019 2020 2021 2022"
+local scenarios "factual v1 v2 v3 v4 v5 v6 v7 v8 v9 v10"
+
+di _n "=== Original observations: " _N " ===" _n
+
+***********************************************
+* STRING TO NUMERIC CONVERSION
+***********************************************
+
+local numeric_vars "ils_dispy dwt dag dgn les liwftmy liwptmy"
+
+foreach var of local numeric_vars {
+    capture confirm variable `var'
+    if _rc == 0 {
+        capture confirm string variable `var'
+        if _rc == 0 {
+            di "Converting `var' from string to numeric..."
+            replace `var' = subinstr(`var', ",", ".", .)
+            destring `var', replace force
+        }
+    }
+}
+
+***********************************************
+* VARIABLE PREPARATION
+***********************************************
+
+rename dag age
+label variable age "Age"
+
+* Gender (dgn: 0=male, 1=female)
+gen gender = dgn
+label define gender_lbl 0 "Male" 1 "Female"
+label values gender gender_lbl
+label variable gender "Gender"
+
+***********************************************
+* CREATE ECONOMIC STATUS MATCHING SILC
+***********************************************
+
+di _n "=== Creating economic status matching SILC categories ===" _n
+
+* SILC categories:
+* 1 = Working full-time
+* 2 = Working part-time
+* 3 = Unemployed
+* 4 = Student
+* 5 = Retired
+* 6 = Permanently disabled
+* 7 = Military/community service
+* 8 = Domestic tasks
+* 9 = Other inactive
+
+gen econ_status = .
+
+* Check available variables
+capture confirm variable les
+if _rc == 0 {
+    di "les variable found"
+}
+capture confirm variable liwftmy
+if _rc == 0 {
+    di "liwftmy (months worked full-time) variable found"
+}
+capture confirm variable liwptmy
+if _rc == 0 {
+    di "liwptmy (months worked part-time) variable found"
+}
+
+* Replace missing with 0 for months worked
+capture confirm variable liwftmy
+if _rc == 0 {
+    replace liwftmy = 0 if missing(liwftmy)
+}
+else {
+    gen liwftmy = 0
+}
+
+capture confirm variable liwptmy
+if _rc == 0 {
+    replace liwptmy = 0 if missing(liwptmy)
+}
+else {
+    gen liwptmy = 0
+}
+
+* Mapping EUROMOD to SILC categories:
+* Using les (labor market status) and liwftmy/liwptmy (months worked)
+
+* 1 = Working full-time: les=1 or les=2, and more full-time months than part-time
+replace econ_status = 1 if inlist(les, 1, 2) & liwftmy > liwptmy
+
+* 2 = Working part-time: les=1 or les=2, and more part-time months than full-time (or equal but >0)
+replace econ_status = 2 if inlist(les, 1, 2) & liwptmy > liwftmy
+replace econ_status = 2 if inlist(les, 1, 2) & liwptmy == liwftmy & liwptmy > 0
+
+* If both are 0 but les indicates employed, use les=1 for full-time, les=2 for part-time (self-employed)
+replace econ_status = 1 if les == 1 & liwftmy == 0 & liwptmy == 0
+replace econ_status = 2 if les == 2 & liwftmy == 0 & liwptmy == 0
+
+* 3 = Unemployed
+replace econ_status = 3 if les == 3
+
+* 4 = Student
+replace econ_status = 4 if les == 5
+
+* 5 = Retired
+replace econ_status = 5 if les == 4
+
+* 6 = Permanently disabled
+replace econ_status = 6 if les == 6
+
+* 7 = Military/community service (not directly in EUROMOD, keep as missing)
+* Usually captured as other categories
+
+* 8 = Domestic tasks
+replace econ_status = 8 if les == 8
+
+* 9 = Other inactive (les = 0, 7, 9 or other)
+replace econ_status = 9 if inlist(les, 0, 7, 9) | (missing(econ_status) & !missing(les))
+
+* Label
+label define econ_lbl 1 "Working full-time" 2 "Working part-time" 3 "Unemployed" ///
+                      4 "Student" 5 "Retired" 6 "Permanently disabled" ///
+                      7 "Military/community service" 8 "Domestic tasks" 9 "Other inactive"
+label values econ_status econ_lbl
+label variable econ_status "Economic status (SILC-matched)"
+
+* Check distribution
+di _n "=== Economic status distribution (SILC-matched) ===" _n
+tab year econ_status [aw=dwt] if scenario == "factual", missing row
+
+* Check full-time vs part-time split
+di _n "=== Full-time vs Part-time distribution ===" _n
+tab econ_status year [aw=dwt] if scenario == "factual" & inlist(econ_status, 1, 2), row
+
+gen ind_disp_inc = ils_dispy
+label variable ind_disp_inc "Individual disposable income"
+
+*************************************************************
+* CALCULATE EQUIVALIZED HOUSEHOLD INCOME
+*************************************************************
+
+di _n "=== Calculating equivalized household income ===" _n
+
+capture drop eq_weight ref_person is_adult adult_cumsum
+
+bysort year scenario idhh: gen is_adult = (age >= 14)
+bysort year scenario idhh: gen adult_cumsum = sum(is_adult)
+gen ref_person = (is_adult == 1 & adult_cumsum == 1)
+
+gen eq_weight = .
+replace eq_weight = 1.0 if ref_person == 1
+replace eq_weight = 0.5 if age >= 14 & ref_person == 0
+replace eq_weight = 0.3 if age < 14
+
+bysort year scenario idhh: egen hh_eq_weight = total(eq_weight)
+bysort year scenario idhh: egen hh_ils_dispy = total(ils_dispy)
+gen eq_hh_ils_dispy = hh_ils_dispy / hh_eq_weight
+
+****************************************
+* Calculate poverty threshold per year and scenario
+****************************************
+tempfile thresholds
+tempname h
+
+postfile `h' int year str10 scenario double median_eq_hh_ils_dispy pov_threshold_60 using `thresholds', replace
+
+foreach yr of local years {
+    foreach scen of local scenarios {
+        quietly count if year==`yr' & scenario=="`scen'"
+        if r(N)==0 continue
+        quietly _pctile eq_hh_ils_dispy [pw=dwt] if year==`yr' & scenario=="`scen'", p(50)
+        local median_val = r(r1)
+        post `h' (`yr') ("`scen'") (`median_val') (0.60*`median_val')
+    }
+}
+
+postclose `h'
+
+merge m:1 year scenario using `thresholds', nogen
+
+****************************************
+* Generate poverty status
+****************************************
+
+gen byte arop = .
+replace arop = 1 if eq_hh_ils_dispy < pov_threshold_60 & !missing(pov_threshold_60)
+replace arop = 0 if eq_hh_ils_dispy >= pov_threshold_60 & !missing(pov_threshold_60)
+label variable arop "At-risk-of-poverty"
+
+di "Poverty status identified"
+di "Total observations: " _N
+
+***************************************
+* Save base microdata
+***************************************
+
+save "$output/arop_by_groups_microdata_EUROMOD.dta", replace
+
+***************************************
+* ANALYSIS 1: BY ECONOMIC STATUS (SILC-MATCHED)
+***************************************
+
+di _n "=== Analysis 1: AROP by Economic Status (SILC-matched) ===" _n
+
+foreach yr of local years {
+    foreach scen of local scenarios {
+        quietly count if year == `yr' & scenario == "`scen'"
+        if r(N) == 0 continue
+        
+        * Total population
+        sum dwt if year == `yr' & scenario == "`scen'"
+        local total_pop_`scen'_`yr' = r(sum)
+        
+        * Total AROP
+        gen temp_arop = arop * dwt if year == `yr' & scenario == "`scen'"
+        sum temp_arop
+        local total_arop_`scen'_`yr' = r(sum)
+        drop temp_arop
+        
+        * AROP rate
+        sum arop [aw=dwt] if year == `yr' & scenario == "`scen'"
+        local arop_rate_`scen'_`yr' = r(mean) * 100
+        
+        forvalues ec = 1/9 {
+            quietly count if year == `yr' & scenario == "`scen'" & econ_status == `ec'
+            if r(N) > 0 {
+                * Population by econ status
+                sum dwt if year == `yr' & scenario == "`scen'" & econ_status == `ec'
+                local pop_`scen'_ec`ec'_`yr' = r(sum)
+                
+                * AROP count by econ status
+                gen temp_arop_ec = arop * dwt if year == `yr' & scenario == "`scen'" & econ_status == `ec'
+                sum temp_arop_ec
+                local arop_count_`scen'_ec`ec'_`yr' = r(sum)
+                drop temp_arop_ec
+                
+                * AROP rate by econ status
+                sum arop [aw=dwt] if year == `yr' & scenario == "`scen'" & econ_status == `ec'
+                local arop_rate_`scen'_ec`ec'_`yr' = r(mean) * 100
+            }
+            else {
+                local pop_`scen'_ec`ec'_`yr' = .
+                local arop_count_`scen'_ec`ec'_`yr' = .
+                local arop_rate_`scen'_ec`ec'_`yr' = .
+            }
+        }
+    }
+}
+
+* Create output 1
+clear
+set obs 300
+
+gen str50 Variable = ""
+foreach scen in factual v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+    gen `scen' = .
+}
+
+local row = 1
+
+foreach yr of local years {
+    
+    replace Variable = "========== AUSTRIA `yr' ==========" in `row'
+    local row = `row' + 1
+    
+    * Overall statistics
+    replace Variable = "=== OVERALL ===" in `row'
+    local row = `row' + 1
+    
+    replace Variable = "Total population" in `row'
+    foreach scen in factual v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+        replace `scen' = `total_pop_`scen'_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Total AROP persons" in `row'
+    foreach scen in factual v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+        replace `scen' = `total_arop_`scen'_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "AROP rate (%)" in `row'
+    foreach scen in factual v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+        replace `scen' = `arop_rate_`scen'_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "  percent change from factual" in `row'
+    replace factual = . in `row'
+    foreach scen in v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+        if `arop_rate_factual_`yr'' != 0 & `arop_rate_factual_`yr'' != . {
+            local pct = ((`arop_rate_`scen'_`yr'' - `arop_rate_factual_`yr'') / `arop_rate_factual_`yr'') * 100
+            replace `scen' = `pct' in `row'
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "" in `row'
+    local row = `row' + 1
+    
+    * By economic status
+    forvalues ec = 1/9 {
+        
+        local ec_name "Working full-time"
+        if `ec' == 2 local ec_name "Working part-time"
+        if `ec' == 3 local ec_name "Unemployed"
+        if `ec' == 4 local ec_name "Student"
+        if `ec' == 5 local ec_name "Retired"
+        if `ec' == 6 local ec_name "Permanently disabled"
+        if `ec' == 7 local ec_name "Military/community service"
+        if `ec' == 8 local ec_name "Domestic tasks"
+        if `ec' == 9 local ec_name "Other inactive"
+        
+        replace Variable = "=== `ec_name' ===" in `row'
+        local row = `row' + 1
+        
+        replace Variable = "Population" in `row'
+        foreach scen in factual v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+            replace `scen' = `pop_`scen'_ec`ec'_`yr'' in `row'
+        }
+        local row = `row' + 1
+        
+        replace Variable = "AROP persons" in `row'
+        foreach scen in factual v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+            replace `scen' = `arop_count_`scen'_ec`ec'_`yr'' in `row'
+        }
+        local row = `row' + 1
+        
+        replace Variable = "AROP rate (%)" in `row'
+        foreach scen in factual v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+            replace `scen' = `arop_rate_`scen'_ec`ec'_`yr'' in `row'
+        }
+        local row = `row' + 1
+        
+        replace Variable = "  percent change from factual" in `row'
+        replace factual = . in `row'
+        foreach scen in v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+            if `arop_rate_factual_ec`ec'_`yr'' != 0 & `arop_rate_factual_ec`ec'_`yr'' != . {
+                local pct = ((`arop_rate_`scen'_ec`ec'_`yr'' - `arop_rate_factual_ec`ec'_`yr'') / `arop_rate_factual_ec`ec'_`yr'') * 100
+                replace `scen' = `pct' in `row'
+            }
+        }
+        local row = `row' + 1
+    }
+}
+
+keep if Variable != ""
+
+foreach scen in factual v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+    format `scen' %15.4f
+}
+
+export excel "$output/AROP_ECONSTATUS_EUROMOD.xlsx", replace sheet("By_EconStatus") firstrow(variables)
+di "Analysis 1 saved: AROP_ECONSTATUS_EUROMOD.xlsx"
+
+***************************************
+* ANALYSIS 2: BY GENDER
+***************************************
+
+di _n "=== Analysis 2: AROP by Gender ===" _n
+
+use "$output/arop_by_groups_microdata_EUROMOD.dta", clear
+
+foreach yr of local years {
+    foreach scen of local scenarios {
+        quietly count if year == `yr' & scenario == "`scen'"
+        if r(N) == 0 continue
+        
+        * Total population
+        sum dwt if year == `yr' & scenario == "`scen'"
+        local total_pop_`scen'_`yr' = r(sum)
+        
+        * Total AROP
+        gen temp_arop = arop * dwt if year == `yr' & scenario == "`scen'"
+        sum temp_arop
+        local total_arop_`scen'_`yr' = r(sum)
+        drop temp_arop
+        
+        * AROP rate
+        sum arop [aw=dwt] if year == `yr' & scenario == "`scen'"
+        local arop_rate_`scen'_`yr' = r(mean) * 100
+        
+        forvalues g = 0/1 {
+            quietly count if year == `yr' & scenario == "`scen'" & gender == `g'
+            if r(N) > 0 {
+                * Population by gender
+                sum dwt if year == `yr' & scenario == "`scen'" & gender == `g'
+                local pop_`scen'_g`g'_`yr' = r(sum)
+                
+                * AROP count by gender
+                gen temp_arop_g = arop * dwt if year == `yr' & scenario == "`scen'" & gender == `g'
+                sum temp_arop_g
+                local arop_count_`scen'_g`g'_`yr' = r(sum)
+                drop temp_arop_g
+                
+                * AROP rate by gender
+                sum arop [aw=dwt] if year == `yr' & scenario == "`scen'" & gender == `g'
+                local arop_rate_`scen'_g`g'_`yr' = r(mean) * 100
+            }
+            else {
+                local pop_`scen'_g`g'_`yr' = .
+                local arop_count_`scen'_g`g'_`yr' = .
+                local arop_rate_`scen'_g`g'_`yr' = .
+            }
+        }
+    }
+}
+
+* Create output 2
+clear
+set obs 150
+
+gen str50 Variable = ""
+foreach scen in factual v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+    gen `scen' = .
+}
+
+local row = 1
+
+foreach yr of local years {
+    
+    replace Variable = "========== AUSTRIA `yr' ==========" in `row'
+    local row = `row' + 1
+    
+    * Overall statistics
+    replace Variable = "=== OVERALL ===" in `row'
+    local row = `row' + 1
+    
+    replace Variable = "Total population" in `row'
+    foreach scen in factual v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+        replace `scen' = `total_pop_`scen'_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Total AROP persons" in `row'
+    foreach scen in factual v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+        replace `scen' = `total_arop_`scen'_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "AROP rate (%)" in `row'
+    foreach scen in factual v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+        replace `scen' = `arop_rate_`scen'_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "  percent change from factual" in `row'
+    replace factual = . in `row'
+    foreach scen in v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+        if `arop_rate_factual_`yr'' != 0 & `arop_rate_factual_`yr'' != . {
+            local pct = ((`arop_rate_`scen'_`yr'' - `arop_rate_factual_`yr'') / `arop_rate_factual_`yr'') * 100
+            replace `scen' = `pct' in `row'
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "" in `row'
+    local row = `row' + 1
+    
+    * Male
+    replace Variable = "=== MALE ===" in `row'
+    local row = `row' + 1
+    
+    replace Variable = "Population" in `row'
+    foreach scen in factual v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+        replace `scen' = `pop_`scen'_g0_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "AROP persons" in `row'
+    foreach scen in factual v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+        replace `scen' = `arop_count_`scen'_g0_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "AROP rate (%)" in `row'
+    foreach scen in factual v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+        replace `scen' = `arop_rate_`scen'_g0_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "  percent change from factual" in `row'
+    replace factual = . in `row'
+    foreach scen in v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+        if `arop_rate_factual_g0_`yr'' != 0 & `arop_rate_factual_g0_`yr'' != . {
+            local pct = ((`arop_rate_`scen'_g0_`yr'' - `arop_rate_factual_g0_`yr'') / `arop_rate_factual_g0_`yr'') * 100
+            replace `scen' = `pct' in `row'
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "" in `row'
+    local row = `row' + 1
+    
+    * Female
+    replace Variable = "=== FEMALE ===" in `row'
+    local row = `row' + 1
+    
+    replace Variable = "Population" in `row'
+    foreach scen in factual v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+        replace `scen' = `pop_`scen'_g1_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "AROP persons" in `row'
+    foreach scen in factual v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+        replace `scen' = `arop_count_`scen'_g1_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "AROP rate (%)" in `row'
+    foreach scen in factual v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+        replace `scen' = `arop_rate_`scen'_g1_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "  percent change from factual" in `row'
+    replace factual = . in `row'
+    foreach scen in v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+        if `arop_rate_factual_g1_`yr'' != 0 & `arop_rate_factual_g1_`yr'' != . {
+            local pct = ((`arop_rate_`scen'_g1_`yr'' - `arop_rate_factual_g1_`yr'') / `arop_rate_factual_g1_`yr'') * 100
+            replace `scen' = `pct' in `row'
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "" in `row'
+    local row = `row' + 1
+}
+
+keep if Variable != ""
+
+foreach scen in factual v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+    format `scen' %15.4f
+}
+
+export excel "$output/AROP_GENDER_EUROMOD.xlsx", replace sheet("By_Gender") firstrow(variables)
+di "Analysis 2 saved: AROP_GENDER_EUROMOD.xlsx"
+
+***************************************
+* ANALYSIS 3: BY ECONOMIC STATUS AND GENDER
+***************************************
+
+di _n "=== Analysis 3: AROP by Economic Status and Gender ===" _n
+
+use "$output/arop_by_groups_microdata_EUROMOD.dta", clear
+
+foreach yr of local years {
+    foreach scen of local scenarios {
+        quietly count if year == `yr' & scenario == "`scen'"
+        if r(N) == 0 continue
+        
+        * Total population
+        sum dwt if year == `yr' & scenario == "`scen'"
+        local total_pop_`scen'_`yr' = r(sum)
+        
+        * Total AROP
+        gen temp_arop = arop * dwt if year == `yr' & scenario == "`scen'"
+        sum temp_arop
+        local total_arop_`scen'_`yr' = r(sum)
+        drop temp_arop
+        
+        * AROP rate
+        sum arop [aw=dwt] if year == `yr' & scenario == "`scen'"
+        local arop_rate_`scen'_`yr' = r(mean) * 100
+        
+        forvalues ec = 1/9 {
+            * Total for this economic status (both genders combined)
+            quietly count if year == `yr' & scenario == "`scen'" & econ_status == `ec'
+            if r(N) > 0 {
+                * Population by econ status (total)
+                sum dwt if year == `yr' & scenario == "`scen'" & econ_status == `ec'
+                local pop_`scen'_ec`ec'_total_`yr' = r(sum)
+                
+                * AROP count by econ status (total)
+                gen temp_arop_ec_tot = arop * dwt if year == `yr' & scenario == "`scen'" & econ_status == `ec'
+                sum temp_arop_ec_tot
+                local arop_count_`scen'_ec`ec'_total_`yr' = r(sum)
+                drop temp_arop_ec_tot
+                
+                * AROP rate by econ status (total)
+                sum arop [aw=dwt] if year == `yr' & scenario == "`scen'" & econ_status == `ec'
+                local arop_rate_`scen'_ec`ec'_total_`yr' = r(mean) * 100
+            }
+            else {
+                local pop_`scen'_ec`ec'_total_`yr' = .
+                local arop_count_`scen'_ec`ec'_total_`yr' = .
+                local arop_rate_`scen'_ec`ec'_total_`yr' = .
+            }
+            
+            * By gender within economic status
+            forvalues g = 0/1 {
+                quietly count if year == `yr' & scenario == "`scen'" & econ_status == `ec' & gender == `g'
+                if r(N) > 0 {
+                    * Population
+                    sum dwt if year == `yr' & scenario == "`scen'" & econ_status == `ec' & gender == `g'
+                    local pop_`scen'_ec`ec'g`g'_`yr' = r(sum)
+                    
+                    * AROP count
+                    gen temp_arop_ecg = arop * dwt if year == `yr' & scenario == "`scen'" & econ_status == `ec' & gender == `g'
+                    sum temp_arop_ecg
+                    local arop_count_`scen'_ec`ec'g`g'_`yr' = r(sum)
+                    drop temp_arop_ecg
+                    
+                    * AROP rate
+                    sum arop [aw=dwt] if year == `yr' & scenario == "`scen'" & econ_status == `ec' & gender == `g'
+                    local arop_rate_`scen'_ec`ec'g`g'_`yr' = r(mean) * 100
+                }
+                else {
+                    local pop_`scen'_ec`ec'g`g'_`yr' = .
+                    local arop_count_`scen'_ec`ec'g`g'_`yr' = .
+                    local arop_rate_`scen'_ec`ec'g`g'_`yr' = .
+                }
+            }
+        }
+    }
+}
+
+* Create output 3
+clear
+set obs 700
+
+gen str50 Variable = ""
+foreach scen in factual v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+    gen `scen' = .
+}
+
+local row = 1
+
+foreach yr of local years {
+    
+    replace Variable = "========== AUSTRIA `yr' ==========" in `row'
+    local row = `row' + 1
+    
+    * Overall statistics
+    replace Variable = "=== OVERALL ===" in `row'
+    local row = `row' + 1
+    
+    replace Variable = "Total population" in `row'
+    foreach scen in factual v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+        replace `scen' = `total_pop_`scen'_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Total AROP persons" in `row'
+    foreach scen in factual v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+        replace `scen' = `total_arop_`scen'_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "AROP rate (%)" in `row'
+    foreach scen in factual v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+        replace `scen' = `arop_rate_`scen'_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "  percent change from factual" in `row'
+    replace factual = . in `row'
+    foreach scen in v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+        if `arop_rate_factual_`yr'' != 0 & `arop_rate_factual_`yr'' != . {
+            local pct = ((`arop_rate_`scen'_`yr'' - `arop_rate_factual_`yr'') / `arop_rate_factual_`yr'') * 100
+            replace `scen' = `pct' in `row'
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "" in `row'
+    local row = `row' + 1
+    
+    * By economic status and gender
+    forvalues ec = 1/9 {
+        
+        local ec_name "Working full-time"
+        if `ec' == 2 local ec_name "Working part-time"
+        if `ec' == 3 local ec_name "Unemployed"
+        if `ec' == 4 local ec_name "Student"
+        if `ec' == 5 local ec_name "Retired"
+        if `ec' == 6 local ec_name "Permanently disabled"
+        if `ec' == 7 local ec_name "Military/community service"
+        if `ec' == 8 local ec_name "Domestic tasks"
+        if `ec' == 9 local ec_name "Other inactive"
+        
+        replace Variable = "=== `ec_name' ===" in `row'
+        local row = `row' + 1
+        
+        * Total for this category
+        replace Variable = "Total - Population" in `row'
+        foreach scen in factual v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+            replace `scen' = `pop_`scen'_ec`ec'_total_`yr'' in `row'
+        }
+        local row = `row' + 1
+        
+        replace Variable = "Total - AROP persons" in `row'
+        foreach scen in factual v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+            replace `scen' = `arop_count_`scen'_ec`ec'_total_`yr'' in `row'
+        }
+        local row = `row' + 1
+        
+        replace Variable = "Total - AROP rate (%)" in `row'
+        foreach scen in factual v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+            replace `scen' = `arop_rate_`scen'_ec`ec'_total_`yr'' in `row'
+        }
+        local row = `row' + 1
+        
+        replace Variable = "  percent change from factual" in `row'
+        replace factual = . in `row'
+        foreach scen in v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+            if `arop_rate_factual_ec`ec'_total_`yr'' != 0 & `arop_rate_factual_ec`ec'_total_`yr'' != . {
+                local pct = ((`arop_rate_`scen'_ec`ec'_total_`yr'' - `arop_rate_factual_ec`ec'_total_`yr'') / `arop_rate_factual_ec`ec'_total_`yr'') * 100
+                replace `scen' = `pct' in `row'
+            }
+        }
+        local row = `row' + 1
+        
+        * Male
+        replace Variable = "Male - Population" in `row'
+        foreach scen in factual v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+            replace `scen' = `pop_`scen'_ec`ec'g0_`yr'' in `row'
+        }
+        local row = `row' + 1
+        
+        replace Variable = "Male - AROP persons" in `row'
+        foreach scen in factual v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+            replace `scen' = `arop_count_`scen'_ec`ec'g0_`yr'' in `row'
+        }
+        local row = `row' + 1
+        
+        replace Variable = "Male - AROP rate (%)" in `row'
+        foreach scen in factual v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+            replace `scen' = `arop_rate_`scen'_ec`ec'g0_`yr'' in `row'
+        }
+        local row = `row' + 1
+        
+        replace Variable = "  percent change from factual" in `row'
+        replace factual = . in `row'
+        foreach scen in v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+            if `arop_rate_factual_ec`ec'g0_`yr'' != 0 & `arop_rate_factual_ec`ec'g0_`yr'' != . {
+                local pct = ((`arop_rate_`scen'_ec`ec'g0_`yr'' - `arop_rate_factual_ec`ec'g0_`yr'') / `arop_rate_factual_ec`ec'g0_`yr'') * 100
+                replace `scen' = `pct' in `row'
+            }
+        }
+        local row = `row' + 1
+        
+        * Female
+        replace Variable = "Female - Population" in `row'
+        foreach scen in factual v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+            replace `scen' = `pop_`scen'_ec`ec'g1_`yr'' in `row'
+        }
+        local row = `row' + 1
+        
+        replace Variable = "Female - AROP persons" in `row'
+        foreach scen in factual v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+            replace `scen' = `arop_count_`scen'_ec`ec'g1_`yr'' in `row'
+        }
+        local row = `row' + 1
+        
+        replace Variable = "Female - AROP rate (%)" in `row'
+        foreach scen in factual v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+            replace `scen' = `arop_rate_`scen'_ec`ec'g1_`yr'' in `row'
+        }
+        local row = `row' + 1
+        
+        replace Variable = "  percent change from factual" in `row'
+        replace factual = . in `row'
+        foreach scen in v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+            if `arop_rate_factual_ec`ec'g1_`yr'' != 0 & `arop_rate_factual_ec`ec'g1_`yr'' != . {
+                local pct = ((`arop_rate_`scen'_ec`ec'g1_`yr'' - `arop_rate_factual_ec`ec'g1_`yr'') / `arop_rate_factual_ec`ec'g1_`yr'') * 100
+                replace `scen' = `pct' in `row'
+            }
+        }
+        local row = `row' + 1
+        
+        replace Variable = "" in `row'
+        local row = `row' + 1
+    }
+}
+
+keep if Variable != ""
+
+foreach scen in factual v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+    format `scen' %15.4f
+}
+
+export excel "$output/AROP_ECONSTATUS_GENDER_EUROMOD.xlsx", replace sheet("By_EconStatus_Gender") firstrow(variables)
+di "Analysis 3 saved: AROP_ECONSTATUS_GENDER_EUROMOD.xlsx"
+
+di _n "==============================================================================="
+di "ALL ANALYSES COMPLETE - EUROMOD"
+di "==============================================================================="
