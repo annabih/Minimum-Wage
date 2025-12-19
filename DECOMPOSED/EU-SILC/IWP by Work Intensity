@@ -13,7 +13,7 @@ clear all
 set more off
 
 use "C:\Users\ALochbih\OneDrive - Bundesarbeitskammer\Desktop\EUROMOD\InWorkPoverty\Robustness\SILC_CrossSec_AllYears_2015_2023.dta"
-global output "C:\Users\ALochbih\OneDrive - Bundesarbeitskammer\Desktop\EUROMOD\InWorkPoverty\Ergebnisse"
+global output "C:\Users\ALochbih\OneDrive - Bundesarbeitskammer\Desktop\EUROMOD\InWorkPoverty\Ergebnisse\Decomposed"
 
 local years "2015 2016 2017 2018 2019 2020 2021 2022 2023"
 
@@ -283,8 +283,8 @@ format Amount %15.0f
 format Percentage %9.2f
 
 capture mkdir "$output"
-export excel using "$output/IWP_WorkIntensity_Structure.xlsx", replace sheet("IWP_by_year") firstrow(varlabels)
+export excel using "$output/IWP_WORKINTENSITY_SILC.xlsx", replace sheet("IWP_by_year") firstrow(varlabels)
 
 restore
 
-di "Done. Excel saved: $output/IWP_WorkIntensity_Structure.xlsx"
+di "Done. Excel saved: $output/IWP_WORKINTENSITY_SILC.xlsx"
