@@ -1,0 +1,512 @@
+*******************************************************************************************************************************************************************************************
+*** Titel: AROP Analysis by ISCED Level and Gender - EU-SILC Austria 2015-2023
+*** Date: 19.12.2024
+*** Aim: Overall poverty rate by ISCED level, gender, and combination
+*** Note: PE040 (highest ISCED level attained)
+*******************************************************************************************************************************************************************************************
+clear all
+set more off
+
+use "C:\Users\ALochbih\OneDrive - Bundesarbeitskammer\Desktop\EUROMOD\InWorkPoverty\Robustness\SILC_CrossSec_AllYears_2015_2023.dta"
+global output "C:\Users\ALochbih\OneDrive - Bundesarbeitskammer\Desktop\EUROMOD\InWorkPoverty\Ergebnisse\Decomposed"
+
+local years "2015 2016 2017 2018 2019 2020 2021 2022 2023"
+
+di _n "=== Original observations: " _N " ===" _n
+
+***********************************************
+* DESTRING ALL NUMERIC VARIABLES
+***********************************************
+
+di _n "=== Destringing variables ===" _n
+
+local numeric_vars "HX090 RB050 PB040 RX010 PX010 PE040 RB090 year"
+
+foreach var of local numeric_vars {
+    capture confirm variable `var'
+    if _rc == 0 {
+        capture confirm string variable `var'
+        if _rc == 0 {
+            di "Converting `var' from string to numeric..."
+            replace `var' = subinstr(`var', ",", ".", .)
+            destring `var', replace force
+            di "  -> `var' converted"
+        }
+        else {
+            di "`var' is already numeric"
+        }
+    }
+    else {
+        di as text "  `var' not found (skipping)"
+    }
+}
+
+***********************************************
+* VARIABLE PREPARATION
+***********************************************
+
+di _n "=== Preparing variables ===" _n
+
+* Personal weight
+capture confirm variable RB050
+if _rc == 0 {
+    gen dwt = RB050
+}
+else {
+    gen dwt = PB040
+}
+label variable dwt "Personal cross-sectional weight"
+
+* Age
+capture confirm variable RX010
+if _rc == 0 {
+    gen age = RX010
+}
+else {
+    gen age = PX010
+}
+label variable age "Age"
+
+* Gender (RB090)
+capture confirm variable RB090
+if _rc == 0 {
+    gen gender = RB090
+    label define gender_lbl 1 "Male" 2 "Female"
+    label values gender gender_lbl
+    label variable gender "Gender"
+}
+else {
+    di as error "WARNING: Gender variable RB090 not found!"
+    gen gender = .
+}
+
+* ISCED Level (PE040 - Highest ISCED level attained)
+capture confirm variable PE040
+if _rc == 0 {
+    gen isced = PE040
+    di "PE040 variable found and mapped to isced"
+    
+    * Check unique values in PE040
+    di _n "=== Unique values in PE040 ===" _n
+    tab PE040, missing
+    
+    * ISCED 2011 categories in SILC:
+    * 0 = Less than primary education (ISCED 0)
+    * 1 = Primary education (ISCED 1)
+    * 2 = Lower secondary education (ISCED 2)
+    * 3 = Upper secondary education (ISCED 3-4)
+    * 5 = Tertiary education (ISCED 5-8)
+    
+    * Note: SILC PE040 uses simplified ISCED categories (0,1,2,3,5), not full 0-8 scale
+    
+    label define isced_lbl 0 "Less than primary (ISCED 0)" ///
+                           1 "Primary (ISCED 1)" ///
+                           2 "Lower secondary (ISCED 2)" ///
+                           3 "Upper secondary (ISCED 3-4)" ///
+                           5 "Tertiary (ISCED 5-8)"
+    label values isced isced_lbl
+    label variable isced "Highest ISCED level attained (PE040)"
+}
+else {
+    di as error "ERROR: ISCED variable PE040 not found!"
+    error 111
+}
+
+* Check distribution by year
+di _n "=== ISCED level distribution by year ===" _n
+tab year isced [aw=dwt], missing row
+
+* Equivalised disposable income
+gen eq_hh_ils_dispy = HX090
+label variable eq_hh_ils_dispy "Equivalised income (Eurostat HX090)"
+
+* Drop missing values
+drop if missing(eq_hh_ils_dispy) | missing(dwt) | missing(age)
+di _n "Observations after dropping missing: " _N _n
+
+****************************************
+* Calculate poverty threshold per year
+****************************************
+tempfile thresholds
+tempname h
+
+postfile `h' int year double median_eq_hh_ils_dispy pov_threshold_60 using `thresholds', replace
+
+foreach yr of local years {
+    quietly count if year==`yr'
+    if r(N)==0 continue
+    quietly _pctile eq_hh_ils_dispy [pw=dwt] if year==`yr', p(50)
+    local median_val = r(r1)
+    post `h' (`yr') (`median_val') (0.60*`median_val')
+}
+
+postclose `h'
+
+merge m:1 year using `thresholds', nogen
+
+****************************************
+* Generate poverty status
+****************************************
+
+gen byte arop = .
+replace arop = 1 if eq_hh_ils_dispy < pov_threshold_60 & !missing(pov_threshold_60)
+replace arop = 0 if eq_hh_ils_dispy >= pov_threshold_60 & !missing(pov_threshold_60)
+label variable arop "At-risk-of-poverty (60% median)"
+
+di "Poverty status identified"
+di "Total observations: " _N
+
+***************************************
+* Save base microdata
+***************************************
+
+save "$output/arop_by_isced_microdata_SILC.dta", replace
+
+***************************************
+* ANALYSIS 1: BY ISCED LEVEL
+***************************************
+
+di _n "=== Analysis 1: AROP by ISCED Level ===" _n
+
+* Determine which ISCED levels actually exist in the data
+quietly tab isced
+local isced_levels = r(r)
+di "Number of ISCED levels found: `isced_levels'"
+
+* Get list of actual values
+quietly levelsof isced, local(isced_vals)
+di "ISCED values present: `isced_vals'"
+
+foreach yr of local years {
+    quietly count if year == `yr'
+    if r(N) == 0 {
+        di "Year `yr': No observations"
+        continue
+    }
+    
+    di "Processing year `yr'..."
+    
+    * Total population
+    sum dwt if year == `yr'
+    local total_pop_`yr' = r(sum)
+    
+    * Total AROP
+    gen temp_arop_`yr' = arop * dwt if year == `yr'
+    sum temp_arop_`yr'
+    local total_arop_`yr' = r(sum)
+    drop temp_arop_`yr'
+    
+    * AROP rate
+    sum arop [aw=dwt] if year == `yr'
+    local arop_rate_`yr' = r(mean) * 100
+    
+    foreach isc of local isced_vals {
+        quietly count if year == `yr' & isced == `isc'
+        if r(N) > 0 {
+            * Population by ISCED
+            sum dwt if year == `yr' & isced == `isc'
+            local pop_isc`isc'_`yr' = r(sum)
+            
+            * AROP count by ISCED
+            gen temp_arop_isc_`yr' = arop * dwt if year == `yr' & isced == `isc'
+            sum temp_arop_isc_`yr'
+            local arop_count_isc`isc'_`yr' = r(sum)
+            drop temp_arop_isc_`yr'
+            
+            * AROP rate by ISCED
+            sum arop [aw=dwt] if year == `yr' & isced == `isc'
+            local arop_rate_isc`isc'_`yr' = r(mean) * 100
+            
+            di "  ISCED `isc': Pop=" %12.0fc `pop_isc`isc'_`yr'' ", AROP=" %12.0fc `arop_count_isc`isc'_`yr'' ", Rate=" %5.2f `arop_rate_isc`isc'_`yr'' "%"
+        }
+        else {
+            local pop_isc`isc'_`yr' = .
+            local arop_count_isc`isc'_`yr' = .
+            local arop_rate_isc`isc'_`yr' = .
+            di "  ISCED `isc': No data"
+        }
+    }
+}
+
+* Create output 1
+clear
+set obs 30
+
+gen str50 Variable = ""
+foreach yr of local years {
+    gen Value_`yr' = .
+}
+
+local row = 1
+
+* Overall statistics
+replace Variable = "=== OVERALL ===" in `row'
+local row = `row' + 1
+
+replace Variable = "Total population" in `row'
+foreach yr of local years {
+    replace Value_`yr' = `total_pop_`yr'' in `row'
+}
+local row = `row' + 1
+
+replace Variable = "Total AROP persons" in `row'
+foreach yr of local years {
+    replace Value_`yr' = `total_arop_`yr'' in `row'
+}
+local row = `row' + 1
+
+replace Variable = "AROP rate (%)" in `row'
+foreach yr of local years {
+    replace Value_`yr' = `arop_rate_`yr'' in `row'
+}
+local row = `row' + 1
+
+replace Variable = "" in `row'
+local row = `row' + 1
+
+* By ISCED level (using actual values present)
+foreach isc of local isced_vals {
+    
+    local isc_name "Less than primary (ISCED 0)"
+    if `isc' == 1 local isc_name "Primary (ISCED 1)"
+    if `isc' == 2 local isc_name "Lower secondary (ISCED 2)"
+    if `isc' == 3 local isc_name "Upper secondary (ISCED 3-4)"
+    if `isc' == 5 local isc_name "Tertiary (ISCED 5-8)"
+    
+    replace Variable = "=== `isc_name' ===" in `row'
+    local row = `row' + 1
+    
+    replace Variable = "Population" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `pop_isc`isc'_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "AROP persons" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `arop_count_isc`isc'_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "AROP rate (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `arop_rate_isc`isc'_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "" in `row'
+    local row = `row' + 1
+}
+
+keep if Variable != ""
+
+foreach yr of local years {
+    format Value_`yr' %15.2f
+}
+
+export excel "$output/AROP_ISCED_SILC.xlsx", replace sheet("By_ISCED") firstrow(variables)
+di "Analysis 1 saved: AROP_ISCED_SILC.xlsx"
+
+***************************************
+* ANALYSIS 2: BY ISCED LEVEL AND GENDER
+***************************************
+
+di _n "=== Analysis 2: AROP by ISCED Level and Gender ===" _n
+
+use "$output/arop_by_isced_microdata_SILC.dta", clear
+
+* Get list of actual ISCED values again
+quietly levelsof isced, local(isced_vals)
+
+foreach yr of local years {
+    quietly count if year == `yr'
+    if r(N) == 0 continue
+    
+    di "Processing year `yr'..."
+    
+    * Total population
+    sum dwt if year == `yr'
+    local total_pop_`yr' = r(sum)
+    
+    * Total AROP
+    gen temp_arop = arop * dwt if year == `yr'
+    sum temp_arop
+    local total_arop_`yr' = r(sum)
+    drop temp_arop
+    
+    * AROP rate
+    sum arop [aw=dwt] if year == `yr'
+    local arop_rate_`yr' = r(mean) * 100
+    
+    foreach isc of local isced_vals {
+        * Total for this ISCED level (both genders combined)
+        quietly count if year == `yr' & isced == `isc'
+        if r(N) > 0 {
+            * Population by ISCED (total)
+            sum dwt if year == `yr' & isced == `isc'
+            local pop_isc`isc'_total_`yr' = r(sum)
+            
+            * AROP count by ISCED (total)
+            gen temp_arop_isc_tot = arop * dwt if year == `yr' & isced == `isc'
+            sum temp_arop_isc_tot
+            local arop_count_isc`isc'_total_`yr' = r(sum)
+            drop temp_arop_isc_tot
+            
+            * AROP rate by ISCED (total)
+            sum arop [aw=dwt] if year == `yr' & isced == `isc'
+            local arop_rate_isc`isc'_total_`yr' = r(mean) * 100
+        }
+        else {
+            local pop_isc`isc'_total_`yr' = .
+            local arop_count_isc`isc'_total_`yr' = .
+            local arop_rate_isc`isc'_total_`yr' = .
+        }
+        
+        * By gender within ISCED level
+        forvalues g = 1/2 {
+            quietly count if year == `yr' & isced == `isc' & gender == `g'
+            if r(N) > 0 {
+                * Population
+                sum dwt if year == `yr' & isced == `isc' & gender == `g'
+                local pop_isc`isc'g`g'_`yr' = r(sum)
+                
+                * AROP count
+                gen temp_arop_iscg = arop * dwt if year == `yr' & isced == `isc' & gender == `g'
+                sum temp_arop_iscg
+                local arop_count_isc`isc'g`g'_`yr' = r(sum)
+                drop temp_arop_iscg
+                
+                * AROP rate
+                sum arop [aw=dwt] if year == `yr' & isced == `isc' & gender == `g'
+                local arop_rate_isc`isc'g`g'_`yr' = r(mean) * 100
+            }
+            else {
+                local pop_isc`isc'g`g'_`yr' = .
+                local arop_count_isc`isc'g`g'_`yr' = .
+                local arop_rate_isc`isc'g`g'_`yr' = .
+            }
+        }
+    }
+}
+
+* Create output 2
+clear
+set obs 60
+
+gen str50 Variable = ""
+foreach yr of local years {
+    gen Value_`yr' = .
+}
+
+local row = 1
+
+* Overall statistics
+replace Variable = "=== OVERALL ===" in `row'
+local row = `row' + 1
+
+replace Variable = "Total population" in `row'
+foreach yr of local years {
+    replace Value_`yr' = `total_pop_`yr'' in `row'
+}
+local row = `row' + 1
+
+replace Variable = "Total AROP persons" in `row'
+foreach yr of local years {
+    replace Value_`yr' = `total_arop_`yr'' in `row'
+}
+local row = `row' + 1
+
+replace Variable = "AROP rate (%)" in `row'
+foreach yr of local years {
+    replace Value_`yr' = `arop_rate_`yr'' in `row'
+}
+local row = `row' + 1
+
+replace Variable = "" in `row'
+local row = `row' + 1
+
+* By ISCED level and gender
+foreach isc of local isced_vals {
+    
+    local isc_name "Less than primary (ISCED 0)"
+    if `isc' == 1 local isc_name "Primary (ISCED 1)"
+    if `isc' == 2 local isc_name "Lower secondary (ISCED 2)"
+    if `isc' == 3 local isc_name "Upper secondary (ISCED 3-4)"
+    if `isc' == 5 local isc_name "Tertiary (ISCED 5-8)"
+    
+    replace Variable = "=== `isc_name' ===" in `row'
+    local row = `row' + 1
+    
+    * Total for this category
+    replace Variable = "Total - Population" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `pop_isc`isc'_total_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Total - AROP persons" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `arop_count_isc`isc'_total_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Total - AROP rate (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `arop_rate_isc`isc'_total_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    * Male
+    replace Variable = "Male - Population" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `pop_isc`isc'g1_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Male - AROP persons" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `arop_count_isc`isc'g1_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Male - AROP rate (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `arop_rate_isc`isc'g1_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    * Female
+    replace Variable = "Female - Population" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `pop_isc`isc'g2_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Female - AROP persons" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `arop_count_isc`isc'g2_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Female - AROP rate (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `arop_rate_isc`isc'g2_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "" in `row'
+    local row = `row' + 1
+}
+
+keep if Variable != ""
+
+foreach yr of local years {
+    format Value_`yr' %15.2f
+}
+
+export excel "$output/AROP_ISCED_GENDER_SILC.xlsx", replace sheet("By_ISCED_Gender") firstrow(variables)
+di "Analysis 2 saved: AROP_ISCED_GENDER_SILC.xlsx"
+
+di _n "==============================================================================="
+di "ALL ANALYSES COMPLETE - EU-SILC"
+di "==============================================================================="
