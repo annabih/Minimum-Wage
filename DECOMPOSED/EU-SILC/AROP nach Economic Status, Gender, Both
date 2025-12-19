@@ -167,8 +167,9 @@ foreach yr of local years {
             sum arop [aw=dwt] if year == `yr' & econ_status == `ec'
             local arop_ec`ec'_`yr' = r(mean) * 100
             
-            sum dwt if year == `yr' & econ_status == `ec'
-            local n_ec`ec'_`yr' = r(sum)
+            * CORRECTED: Count weighted population
+            count if year == `yr' & econ_status == `ec'
+            local n_ec`ec'_`yr' = r(N)
             
             di "  Econ status `ec': AROP=" %5.2f `arop_ec`ec'_`yr'' "%, N=" %12.0fc `n_ec`ec'_`yr''
         }
@@ -212,7 +213,7 @@ forvalues ec = 1/9 {
     }
     local row = `row' + 1
     
-    replace Variable = "Population" in `row'
+    replace Variable = "Population (unweighted N)" in `row'
     foreach yr of local years {
         replace Value_`yr' = `n_ec`ec'_`yr'' in `row'
     }
@@ -225,7 +226,7 @@ forvalues ec = 1/9 {
 keep if Variable != ""
 
 foreach yr of local years {
-    format Value_`yr' %15.2f
+    format Value_`yr' %15.0f
 }
 
 export excel "$output/AROP_ECONSTATUS_SILC.xlsx", replace sheet("By_EconStatus") firstrow(variables)
@@ -251,8 +252,9 @@ foreach yr of local years {
             sum arop [aw=dwt] if year == `yr' & gender == `g'
             local arop_g`g'_`yr' = r(mean) * 100
             
-            sum dwt if year == `yr' & gender == `g'
-            local n_g`g'_`yr' = r(sum)
+            * CORRECTED: Count unweighted population
+            count if year == `yr' & gender == `g'
+            local n_g`g'_`yr' = r(N)
             
             di "  Gender `g': AROP=" %5.2f `arop_g`g'_`yr'' "%, N=" %12.0fc `n_g`g'_`yr''
         }
@@ -283,7 +285,7 @@ foreach yr of local years {
 }
 local row = `row' + 1
 
-replace Variable = "Population" in `row'
+replace Variable = "Population (unweighted N)" in `row'
 foreach yr of local years {
     replace Value_`yr' = `n_g1_`yr'' in `row'
 }
@@ -301,7 +303,7 @@ foreach yr of local years {
 }
 local row = `row' + 1
 
-replace Variable = "Population" in `row'
+replace Variable = "Population (unweighted N)" in `row'
 foreach yr of local years {
     replace Value_`yr' = `n_g2_`yr'' in `row'
 }
@@ -310,7 +312,7 @@ local row = `row' + 1
 keep if Variable != ""
 
 foreach yr of local years {
-    format Value_`yr' %15.2f
+    format Value_`yr' %15.0f
 }
 
 export excel "$output/AROP_GENDER_SILC.xlsx", replace sheet("By_Gender") firstrow(variables)
@@ -337,8 +339,9 @@ foreach yr of local years {
                 sum arop [aw=dwt] if year == `yr' & econ_status == `ec' & gender == `g'
                 local arop_ec`ec'g`g'_`yr' = r(mean) * 100
                 
-                sum dwt if year == `yr' & econ_status == `ec' & gender == `g'
-                local n_ec`ec'g`g'_`yr' = r(sum)
+                * CORRECTED: Count unweighted population
+                count if year == `yr' & econ_status == `ec' & gender == `g'
+                local n_ec`ec'g`g'_`yr' = r(N)
             }
             else {
                 local arop_ec`ec'g`g'_`yr' = .
@@ -380,7 +383,7 @@ forvalues ec = 1/9 {
     }
     local row = `row' + 1
     
-    replace Variable = "Male - Population" in `row'
+    replace Variable = "Male - Population (unweighted N)" in `row'
     foreach yr of local years {
         replace Value_`yr' = `n_ec`ec'g1_`yr'' in `row'
     }
@@ -392,7 +395,7 @@ forvalues ec = 1/9 {
     }
     local row = `row' + 1
     
-    replace Variable = "Female - Population" in `row'
+    replace Variable = "Female - Population (unweighted N)" in `row'
     foreach yr of local years {
         replace Value_`yr' = `n_ec`ec'g2_`yr'' in `row'
     }
@@ -405,7 +408,7 @@ forvalues ec = 1/9 {
 keep if Variable != ""
 
 foreach yr of local years {
-    format Value_`yr' %15.2f
+    format Value_`yr' %15.0f
 }
 
 export excel "$output/AROP_ECONSTATUS_GENDER_SILC.xlsx", replace sheet("By_EconStatus_Gender") firstrow(variables)
