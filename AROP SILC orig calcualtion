@@ -175,7 +175,7 @@ tab arop [aw=dwt]
 * Save micro-level data
 ***************************************
 
-save "$output/poverty_microdata_SILC_AllYears.dta", replace
+save "$output/AROP_SILC_ORIG.dta", replace
 di "Micro-level data saved"
 
 ***************************************
