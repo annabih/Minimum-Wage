@@ -1,1 +1,327 @@
+*******************************************************************************************************************************************************************************************
+*** Titel: Overall Poverty Analysis using merged EU-SILC Austria 2015-2023
+*** Date: 19.12.2024
+*** Aim: Overall poverty rate calculation using HX090 (Eurostat equivalised income)
+*** Note: Poverty threshold is recalculated for each year
+*******************************************************************************************************************************************************************************************
+clear all
+set more off
 
+use "C:\Users\ALochbih\OneDrive - Bundesarbeitskammer\Desktop\EUROMOD\InWorkPoverty\Robustness\SILC_CrossSec_AllYears_2015_2023.dta"
+global output "C:\Users\ALochbih\OneDrive - Bundesarbeitskammer\Desktop\EUROMOD\InWorkPoverty\Robustness"
+
+local years "2015 2016 2017 2018 2019 2020 2021 2022 2023"
+
+di _n "=== Original observations: " _N " ===" _n
+
+***********************************************
+* DESTRING ALL NUMERIC VARIABLES
+***********************************************
+
+di _n "=== Destringing variables ===" _n
+
+local numeric_vars "HX090 RB050 PB040 RX010 PX010 year"
+
+foreach var of local numeric_vars {
+    capture confirm variable `var'
+    if _rc == 0 {
+        capture confirm string variable `var'
+        if _rc == 0 {
+            di "Converting `var' from string to numeric..."
+            replace `var' = subinstr(`var', ",", ".", .)
+            destring `var', replace force
+            di "  -> `var' converted"
+        }
+        else {
+            di "`var' is already numeric"
+        }
+    }
+    else {
+        di as text "  `var' not found (skipping)"
+    }
+}
+
+***********************************************
+* VARIABLE PREPARATION
+***********************************************
+
+di _n "=== Preparing variables ===" _n
+
+* Personal weight (use RB050 from R-file or PB040 from P-file)
+capture confirm variable RB050
+if _rc == 0 {
+    gen dwt = RB050
+    di "Using RB050 for weights"
+}
+else {
+    capture confirm variable PB040
+    if _rc == 0 {
+        gen dwt = PB040
+        di "Using PB040 for weights"
+    }
+    else {
+        di as error "ERROR: No weight variable found (RB050 or PB040)!"
+        error 111
+    }
+}
+label variable dwt "Personal cross-sectional weight"
+
+* Age (use RX010 from R-file or PX010 from P-file)
+capture confirm variable RX010
+if _rc == 0 {
+    gen age = RX010
+    di "Using RX010 for age"
+}
+else {
+    capture confirm variable PX010
+    if _rc == 0 {
+        gen age = PX010
+        di "Using PX010 for age"
+    }
+    else {
+        di as error "ERROR: No age variable found (RX010 or PX010)!"
+        error 111
+    }
+}
+label variable age "Age"
+
+* Equivalised disposable income - USE HX090 (Eurostat calculated)
+capture confirm variable HX090
+if _rc == 0 {
+    gen eq_hh_ils_dispy = HX090
+    di "Using HX090 for equivalised income"
+}
+else {
+    di as error "ERROR: HX090 (equivalised disposable income) not found!"
+    error 111
+}
+label variable eq_hh_ils_dispy "Equivalised income (Eurostat HX090)"
+
+* Check for missing values
+di _n "=== Checking for missing values ===" _n
+count if missing(eq_hh_ils_dispy)
+di "Missing equivalised income: " r(N)
+count if missing(dwt)
+di "Missing weights: " r(N)
+count if missing(age)
+di "Missing age: " r(N)
+
+* Drop observations with missing key variables
+drop if missing(eq_hh_ils_dispy) | missing(dwt) | missing(age)
+di _n "Observations after dropping missing: " _N _n
+
+****************************************
+* Calculate poverty threshold per year
+****************************************
+tempfile thresholds
+tempname h
+
+postfile `h' int year double median_eq_hh_ils_dispy pov_threshold_60 using `thresholds', replace
+
+foreach yr of local years {
+
+    quietly count if year==`yr'
+    if r(N)==0 continue
+
+    quietly _pctile eq_hh_ils_dispy [pw=dwt] if year==`yr', p(50)
+    local median_val = r(r1)
+
+    post `h' (`yr') (`median_val') (0.60*`median_val')
+    di "Year `yr' Median=" %12.2f `median_val' " Threshold=" %12.2f (0.60*`median_val')
+}
+
+postclose `h'
+
+****************************************
+* Merge thresholds back to micro data
+****************************************
+merge m:1 year using `thresholds', nogen
+
+* ****************************************
+* Generate poverty status (individual level)
+* ****************************************
+
+* Generate at risk of poverty variable
+gen byte arop = .
+replace arop = 1 if eq_hh_ils_dispy < pov_threshold_60 & !missing(pov_threshold_60)
+replace arop = 0 if eq_hh_ils_dispy >= pov_threshold_60 & !missing(pov_threshold_60)
+label variable arop "At-risk-of-poverty (60% median eq HH disposable income)"
+
+* Generate arop gap absolute
+gen double arop_gap_abs = .
+replace arop_gap_abs = pov_threshold_60 - eq_hh_ils_dispy if arop == 1
+label variable arop_gap_abs "Poverty gap absolute (eq HH disposable income)"
+
+* Generate arop gap %
+gen double arop_gap_rel = .
+replace arop_gap_rel = ((pov_threshold_60 - eq_hh_ils_dispy) / pov_threshold_60) * 100 if arop == 1
+label variable arop_gap_rel "Relative poverty gap (% of 60% median eq HH income)"
+
+* Generate age groups
+gen age_group = .
+replace age_group = 1 if age < 18
+replace age_group = 2 if age >= 18 & age < 65
+replace age_group = 3 if age >= 65
+label define age_lbl 1 "Children (<18)" 2 "Working age (18-64)" 3 "Elderly (65+)"
+label values age_group age_lbl
+
+di "Poverty status identified"
+di "Total observations: " _N
+
+* Quick check
+tab arop [aw=dwt]
+
+***************************************
+* Save micro-level data
+***************************************
+
+save "$output/poverty_microdata_SILC_AllYears.dta", replace
+di "Micro-level data saved"
+
+***************************************
+* Calculate statistics by year and save locals
+***************************************
+
+di _n "=== Calculating statistics by year ===" _n
+
+foreach yr of local years {
+    
+    quietly count if year == `yr'
+    if r(N) == 0 {
+        di "Year `yr': No observations"
+        continue
+    }
+    
+    * Poverty rate (use aw for sum)
+    sum arop [aw=dwt] if year == `yr'
+    local pov_rate_`yr' = r(mean) * 100
+    
+    * Total population
+    sum dwt if year == `yr'
+    local n_total_`yr' = r(sum)
+    
+    * Number poor
+    gen temp_poor_`yr' = arop * dwt if year == `yr'
+    sum temp_poor_`yr'
+    local n_poor_`yr' = r(sum)
+    drop temp_poor_`yr'
+    
+    * Poverty line
+    sum pov_threshold_60 if year == `yr', meanonly
+    local pov_line_`yr' = r(mean)
+    
+    * Median income
+    sum median_eq_hh_ils_dispy if year == `yr', meanonly
+    local median_inc_`yr' = r(mean)
+    
+    * Mean income (use aw)
+    sum eq_hh_ils_dispy [aw=dwt] if year == `yr'
+    local mean_inc_`yr' = r(mean)
+    
+    * Poverty gaps (use aw)
+    quietly count if year == `yr' & arop == 1
+    if r(N) > 0 {
+        sum arop_gap_abs [aw=dwt] if year == `yr' & arop == 1
+        local gap_abs_`yr' = r(mean)
+        
+        sum arop_gap_rel [aw=dwt] if year == `yr' & arop == 1
+        local gap_rel_`yr' = r(mean)
+    }
+    else {
+        local gap_abs_`yr' = .
+        local gap_rel_`yr' = .
+    }
+    
+    di "Year `yr': Poverty rate = " %5.2f `pov_rate_`yr'' "%"
+}
+
+*===============================================================================
+* CREATE FORMATTED OUTPUT
+*===============================================================================
+
+di _n "=== Creating Excel output ===" _n
+
+clear
+set obs 10
+
+gen str50 Variable = ""
+foreach yr of local years {
+    gen Value_`yr' = .
+}
+
+local row = 1
+
+replace Variable = "Poverty rate (%)" in `row'
+foreach yr of local years {
+    replace Value_`yr' = `pov_rate_`yr'' in `row'
+}
+local row = `row' + 1
+
+replace Variable = "Total population" in `row'
+foreach yr of local years {
+    replace Value_`yr' = `n_total_`yr'' in `row'
+}
+local row = `row' + 1
+
+replace Variable = "Number poor" in `row'
+foreach yr of local years {
+    replace Value_`yr' = `n_poor_`yr'' in `row'
+}
+local row = `row' + 1
+
+replace Variable = "Poverty line (Euro)" in `row'
+foreach yr of local years {
+    replace Value_`yr' = `pov_line_`yr'' in `row'
+}
+local row = `row' + 1
+
+replace Variable = "Median equiv. income (Euro)" in `row'
+foreach yr of local years {
+    replace Value_`yr' = `median_inc_`yr'' in `row'
+}
+local row = `row' + 1
+
+replace Variable = "Mean equiv. income (Euro)" in `row'
+foreach yr of local years {
+    replace Value_`yr' = `mean_inc_`yr'' in `row'
+}
+local row = `row' + 1
+
+replace Variable = "Avg poverty gap (Euro)" in `row'
+foreach yr of local years {
+    replace Value_`yr' = `gap_abs_`yr'' in `row'
+}
+local row = `row' + 1
+
+replace Variable = "Avg poverty gap (Percent)" in `row'
+foreach yr of local years {
+    replace Value_`yr' = `gap_rel_`yr'' in `row'
+}
+local row = `row' + 1
+
+keep if Variable != ""
+
+* Format all numeric variables
+foreach yr of local years {
+    format Value_`yr' %15.2f
+}
+
+di _n "=== Exporting to Excel ===" _n
+
+capture mkdir "$output"
+
+export excel "$output/poverty_analysis_SILC_AllYears.xlsx", replace sheet("Poverty_ByYear") firstrow(variables)
+
+di as result "File saved successfully!"
+
+di _n "==============================================================================="
+di "OVERALL POVERTY ANALYSIS COMPLETE - EU-SILC 2015-2023"
+di "==============================================================================="
+di "Income variable: HX090 (Eurostat equivalised disposable income)"
+di "Weights: pw=dwt for percentiles, aw=dwt for means/sums"
+di "==============================================================================="
+
+* Display results
+list Variable Value_*, clean noobs
+
+di _n "==============================================================================="
