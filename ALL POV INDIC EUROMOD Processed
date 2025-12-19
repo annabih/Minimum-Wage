@@ -1,1 +1,353 @@
+*******************************************************************************************************************************************************************************************
+*** Titel: Combined AROP and IWP Analysis - CHANGES ONLY
+*** Date: 19.12.2024
+*** Aim: Calculate changes in AROP and IWP from factual to policy scenarios
+*** Output: Only percentage point and percent changes (no absolute values)
+*******************************************************************************************************************************************************************************************
+clear all
+set more off
 
+use "C:\Users\ALochbih\OneDrive - Bundesarbeitskammer\Desktop\EUROMOD\InWorkPoverty\Stata\Policy_V1_MA_AllYears.dta"
+global output "C:\Users\ALochbih\OneDrive - Bundesarbeitskammer\Desktop\EUROMOD\InWorkPoverty\Ergebnisse"
+
+local years "2015 2016 2017 2018 2019 2020 2021 2022"
+local scenarios "factual v1 v2 v3 v4 v5 v6 v7 v8 v9 v10"
+
+di _n "=== Original observations: " _N " ===" _n
+
+***********************************************
+* STRING TO NUMERIC CONVERSION
+***********************************************
+
+local numeric_vars "ils_dispy dwt dag liwmy"
+
+foreach var of local numeric_vars {
+    capture confirm variable `var'
+    if _rc == 0 {
+        capture confirm string variable `var'
+        if _rc == 0 {
+            di "Converting `var' from string to numeric..."
+            replace `var' = subinstr(`var', ",", ".", .)
+            destring `var', replace force
+            di "  -> `var' converted"
+        }
+    }
+}
+
+**********************************
+* VARIABLE PREPARATION
+**********************************
+
+rename dag age
+label variable age "Age"
+
+gen ind_disp_inc = ils_dispy
+label variable ind_disp_inc "Individual disposable income"
+
+capture confirm variable liwmy
+if _rc == 0 {
+    rename liwmy months_worked
+}
+else {
+    gen months_worked = 0
+}
+replace months_worked = 0 if missing(months_worked)
+label variable months_worked "Months worked"
+
+*************************************************************
+* CALCULATE EQUIVALIZED HOUSEHOLD INCOME (Modified OECD Scale)
+*************************************************************
+
+di _n "=== Calculating equivalized household income ===" _n
+
+bysort year scenario idhh: gen row_num = _n
+bysort year scenario idhh: gen is_adult = (age >= 14)
+bysort year scenario idhh: gen adult_cumsum = sum(is_adult)
+gen ref_person = (is_adult == 1 & adult_cumsum == 1)
+
+gen eq_weight = .
+replace eq_weight = 1.0 if ref_person == 1
+replace eq_weight = 0.5 if age >= 14 & ref_person == 0
+replace eq_weight = 0.3 if age < 14
+
+bysort year scenario idhh: egen hh_eq_weight = total(eq_weight)
+bysort year scenario idhh: egen hh_ils_dispy = total(ils_dispy)
+gen eq_hh_ils_dispy = hh_ils_dispy / hh_eq_weight
+
+****************************************
+* Calculate poverty threshold per year and scenario
+****************************************
+tempfile thresholds
+tempname h
+
+postfile `h' int year str10 scenario double median_eq_hh_ils_dispy pov_threshold_60 using `thresholds', replace
+
+foreach yr of local years {
+    foreach scen of local scenarios {
+        quietly count if year==`yr' & scenario=="`scen'"
+        if r(N)==0 continue
+        quietly _pctile eq_hh_ils_dispy [pw=dwt] if year==`yr' & scenario=="`scen'", p(50)
+        local median_val = r(r1)
+        post `h' (`yr') ("`scen'") (`median_val') (0.60*`median_val')
+    }
+}
+
+postclose `h'
+
+merge m:1 year scenario using `thresholds', nogen
+
+****************************************
+* Generate AROP status
+****************************************
+
+gen byte arop = .
+replace arop = 1 if eq_hh_ils_dispy < pov_threshold_60 & !missing(pov_threshold_60)
+replace arop = 0 if eq_hh_ils_dispy >= pov_threshold_60 & !missing(pov_threshold_60)
+
+gen double arop_gap_abs = pov_threshold_60 - eq_hh_ils_dispy if arop == 1
+gen double arop_gap_rel = ((pov_threshold_60 - eq_hh_ils_dispy) / pov_threshold_60) * 100 if arop == 1
+
+****************************************
+* Generate IWP status
+****************************************
+
+gen worker = (months_worked > 6 & age >= 18 & age <= 64)
+gen inwork_poor = (worker == 1 & arop == 1)
+gen iwp_gap_abs = pov_threshold_60 - eq_hh_ils_dispy if inwork_poor == 1
+gen iwp_gap_rel = ((pov_threshold_60 - eq_hh_ils_dispy) / pov_threshold_60) * 100 if inwork_poor == 1
+
+di "AROP and IWP status identified"
+di "Total observations: " _N
+
+***************************************
+* Calculate statistics by year and scenario
+***************************************
+
+di _n "=== Calculating statistics ===" _n
+
+* AROP statistics
+gen weighted_arop = arop * dwt
+bysort year scenario: egen total_arop = sum(weighted_arop)
+bysort year scenario: egen total_pop = sum(dwt)
+
+* IWP statistics
+gen weighted_iwp = inwork_poor * dwt if worker == 1
+bysort year scenario: egen total_iwp = sum(weighted_iwp)
+bysort year scenario: egen total_workers = sum(dwt) if worker == 1
+
+collapse (mean) arop_rate=arop arop_gap_abs arop_gap_rel iwp_rate=inwork_poor iwp_gap_abs iwp_gap_rel [aw=dwt], by(year scenario)
+
+replace arop_rate = arop_rate * 100
+replace iwp_rate = iwp_rate * 100
+
+**********************
+* Reshape wide format
+**********************
+
+reshape wide arop_rate arop_gap_abs arop_gap_rel iwp_rate iwp_gap_abs iwp_gap_rel, i(year) j(scenario) string
+
+sort year
+
+tempfile wide_data
+save `wide_data', replace
+
+*===============================================================================
+* CREATE OUTPUT WITH CHANGES ONLY
+*===============================================================================
+
+di _n "=== Creating Excel output with CHANGES ONLY ===" _n
+
+clear
+set obs 200
+
+gen str50 Variable = ""
+foreach scen in v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+    gen `scen' = .
+}
+
+local row = 1
+
+foreach yr of local years {
+
+    preserve
+    use `wide_data', clear
+    count if year == `yr'
+    local year_exists = r(N)
+
+    if `year_exists' > 0 {
+
+        * Get factual values
+        sum arop_ratefactual if year == `yr', meanonly
+        local arop_rate_factual = r(mean)
+        
+        sum arop_gap_absfactual if year == `yr', meanonly
+        local arop_gap_abs_factual = r(mean)
+        
+        sum arop_gap_relfactual if year == `yr', meanonly
+        local arop_gap_rel_factual = r(mean)
+        
+        sum iwp_ratefactual if year == `yr', meanonly
+        local iwp_rate_factual = r(mean)
+        
+        sum iwp_gap_absfactual if year == `yr', meanonly
+        local iwp_gap_abs_factual = r(mean)
+        
+        sum iwp_gap_relfactual if year == `yr', meanonly
+        local iwp_gap_rel_factual = r(mean)
+
+        * Get scenario values
+        foreach scen in v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+            sum arop_rate`scen' if year == `yr', meanonly
+            local arop_rate_`scen' = r(mean)
+            
+            sum arop_gap_abs`scen' if year == `yr', meanonly
+            local arop_gap_abs_`scen' = r(mean)
+            
+            sum arop_gap_rel`scen' if year == `yr', meanonly
+            local arop_gap_rel_`scen' = r(mean)
+            
+            sum iwp_rate`scen' if year == `yr', meanonly
+            local iwp_rate_`scen' = r(mean)
+            
+            sum iwp_gap_abs`scen' if year == `yr', meanonly
+            local iwp_gap_abs_`scen' = r(mean)
+            
+            sum iwp_gap_rel`scen' if year == `yr', meanonly
+            local iwp_gap_rel_`scen' = r(mean)
+        }
+
+        restore
+
+        * YEAR HEADER
+        local row = `row' + 2
+        replace Variable = "Austria `yr'" in `row'
+        local row = `row' + 1
+
+        * === OVERALL POVERTY (AROP) ===
+        replace Variable = "=== OVERALL POVERTY (AROP) ===" in `row'
+        local row = `row' + 1
+
+        * AROP rate - percentage point change
+        replace Variable = "AROP rate (pp change)" in `row'
+        foreach scen in v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+            local pp_change = `arop_rate_`scen'' - `arop_rate_factual'
+            replace `scen' = `pp_change' in `row'
+        }
+        local row = `row' + 1
+
+        * AROP rate - percent change
+        replace Variable = "AROP rate (% change)" in `row'
+        foreach scen in v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+            if `arop_rate_factual' != 0 & `arop_rate_factual' != . {
+                local pct_change = ((`arop_rate_`scen'' - `arop_rate_factual') / `arop_rate_factual') * 100
+                replace `scen' = `pct_change' in `row'
+            }
+        }
+        local row = `row' + 1
+
+        * AROP gap (Euro) - percent change
+        replace Variable = "AROP gap Euro (% change)" in `row'
+        foreach scen in v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+            if `arop_gap_abs_factual' != 0 & `arop_gap_abs_factual' != . {
+                local pct_change = ((`arop_gap_abs_`scen'' - `arop_gap_abs_factual') / `arop_gap_abs_factual') * 100
+                replace `scen' = `pct_change' in `row'
+            }
+        }
+        local row = `row' + 1
+
+        * AROP gap (%) - percentage point change
+        replace Variable = "AROP gap % (pp change)" in `row'
+        foreach scen in v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+            local pp_change = `arop_gap_rel_`scen'' - `arop_gap_rel_factual'
+            replace `scen' = `pp_change' in `row'
+        }
+        local row = `row' + 1
+
+        * AROP gap (%) - percent change
+        replace Variable = "AROP gap % (% change)" in `row'
+        foreach scen in v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+            if `arop_gap_rel_factual' != 0 & `arop_gap_rel_factual' != . {
+                local pct_change = ((`arop_gap_rel_`scen'' - `arop_gap_rel_factual') / `arop_gap_rel_factual') * 100
+                replace `scen' = `pct_change' in `row'
+            }
+        }
+        local row = `row' + 1
+
+        * Empty row
+        replace Variable = "" in `row'
+        local row = `row' + 1
+
+        * === IN-WORK POVERTY (IWP) ===
+        replace Variable = "=== IN-WORK POVERTY (IWP) ===" in `row'
+        local row = `row' + 1
+
+        * IWP rate - percentage point change
+        replace Variable = "IWP rate (pp change)" in `row'
+        foreach scen in v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+            local pp_change = `iwp_rate_`scen'' - `iwp_rate_factual'
+            replace `scen' = `pp_change' in `row'
+        }
+        local row = `row' + 1
+
+        * IWP rate - percent change
+        replace Variable = "IWP rate (% change)" in `row'
+        foreach scen in v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+            if `iwp_rate_factual' != 0 & `iwp_rate_factual' != . {
+                local pct_change = ((`iwp_rate_`scen'' - `iwp_rate_factual') / `iwp_rate_factual') * 100
+                replace `scen' = `pct_change' in `row'
+            }
+        }
+        local row = `row' + 1
+
+        * IWP gap (Euro) - percent change
+        replace Variable = "IWP gap Euro (% change)" in `row'
+        foreach scen in v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+            if `iwp_gap_abs_factual' != 0 & `iwp_gap_abs_factual' != . {
+                local pct_change = ((`iwp_gap_abs_`scen'' - `iwp_gap_abs_factual') / `iwp_gap_abs_factual') * 100
+                replace `scen' = `pct_change' in `row'
+            }
+        }
+        local row = `row' + 1
+
+        * IWP gap (%) - percentage point change
+        replace Variable = "IWP gap % (pp change)" in `row'
+        foreach scen in v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+            local pp_change = `iwp_gap_rel_`scen'' - `iwp_gap_rel_factual'
+            replace `scen' = `pp_change' in `row'
+        }
+        local row = `row' + 1
+
+        * IWP gap (%) - percent change
+        replace Variable = "IWP gap % (% change)" in `row'
+        foreach scen in v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+            if `iwp_gap_rel_factual' != 0 & `iwp_gap_rel_factual' != . {
+                local pct_change = ((`iwp_gap_rel_`scen'' - `iwp_gap_rel_factual') / `iwp_gap_rel_factual') * 100
+                replace `scen' = `pct_change' in `row'
+            }
+        }
+        local row = `row' + 1
+    }
+    else {
+        restore
+    }
+}
+
+keep if Variable != ""
+
+* Format all numeric variables
+foreach scen in v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 {
+    format `scen' %15.4f
+}
+
+capture mkdir "$output"
+
+export excel "$output/ALL_POV_INDIC_EUROMOD_PROCESSED.xlsx", replace sheet("AROP_IWP_Changes") firstrow(variables)
+
+di as result "File saved successfully!"
+
+di _n "==============================================================================="
+di "COMBINED AROP + IWP ANALYSIS COMPLETE - CHANGES ONLY"
+di "==============================================================================="
+di "Output: poverty_combined_CHANGES_ONLY.xlsx"
+di "Contains: Percentage point and percent changes for AROP and IWP"
+di "==============================================================================="
