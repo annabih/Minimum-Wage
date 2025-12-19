@@ -7,7 +7,7 @@ clear all
 set more off
 
 use "C:\Users\ALochbih\OneDrive - Bundesarbeitskammer\Desktop\EUROMOD\InWorkPoverty\Robustness\SILC_CrossSec_AllYears_2015_2023.dta"
-global output "C:\Users\ALochbih\OneDrive - Bundesarbeitskammer\Desktop\EUROMOD\InWorkPoverty\Robustness"
+global output "C:\Users\ALochbih\OneDrive - Bundesarbeitskammer\Desktop\EUROMOD\InWorkPoverty\Decomposed"
 
 local years "2015 2016 2017 2018 2019 2020 2021 2022 2023"
 
@@ -77,18 +77,17 @@ else {
 capture confirm variable PL031
 if _rc == 0 {
     gen econ_status = PL031
-    label define econ_lbl 1 "Working FT" 2 "Working PT" 3 "Unemployed" 4 "Student" ///
-                          5 "Retired" 6 "Disabled" 7 "Military/CS" 8 "Domestic tasks" 9 "Other"
+    label define econ_lbl 1 "Working FT" 2 "Working PT" 3 "Unemployed" 4 "Student" 5 "Retired" 6 "Disabled" 7 "Military/CS" 8 "Domestic tasks" 9 "Other"
     label values econ_status econ_lbl
     label variable econ_status "Economic status (self-defined)"
     
     * Create simplified categories
     gen econ_cat = .
-    replace econ_cat = 1 if inlist(econ_status, 1, 2)  // Working
-    replace econ_cat = 2 if econ_status == 3           // Unemployed
-    replace econ_cat = 3 if econ_status == 5           // Retired
-    replace econ_cat = 4 if econ_status == 4           // Student
-    replace econ_cat = 5 if inlist(econ_status, 6, 7, 8, 9)  // Other inactive
+    replace econ_cat = 1 if inlist(econ_status, 1, 2)  
+    replace econ_cat = 2 if econ_status == 3         
+    replace econ_cat = 3 if econ_status == 5          
+    replace econ_cat = 4 if econ_status == 4         
+    replace econ_cat = 5 if inlist(econ_status, 6, 7, 8, 9) 
     label define econ_cat_lbl 1 "Working" 2 "Unemployed" 3 "Retired" 4 "Student" 5 "Other inactive"
     label values econ_cat econ_cat_lbl
     label variable econ_cat "Economic status (simplified)"
@@ -247,8 +246,8 @@ foreach yr of local years {
     format Value_`yr' %15.2f
 }
 
-export excel "$output/arop_by_economic_status_SILC.xlsx", replace sheet("By_EconStatus") firstrow(variables)
-di "Analysis 1 saved: arop_by_economic_status_SILC.xlsx"
+export excel "$output/AROP_ECONSTATUS_SILC.xlsx", replace sheet("By_EconStatus") firstrow(variables)
+di "Analysis 1 saved: AROP_ECONSTATUS_SILC.xlsx"
 
 ***************************************
 * ANALYSIS 2: BY GENDER
@@ -325,8 +324,8 @@ foreach yr of local years {
     format Value_`yr' %15.2f
 }
 
-export excel "$output/arop_by_gender_SILC.xlsx", replace sheet("By_Gender") firstrow(variables)
-di "Analysis 2 saved: arop_by_gender_SILC.xlsx"
+export excel "$output/AROP_GENDER_SILC.xlsx", replace sheet("By_Gender") firstrow(variables)
+di "Analysis 2 saved: AROP_GENDER_SILC.xlsx"
 
 ***************************************
 * ANALYSIS 3: BY ECONOMIC STATUS AND GENDER
@@ -414,14 +413,9 @@ foreach yr of local years {
     format Value_`yr' %15.2f
 }
 
-export excel "$output/arop_by_economic_status_and_gender_SILC.xlsx", replace sheet("By_EconStatus_Gender") firstrow(variables)
-di "Analysis 3 saved: arop_by_economic_status_and_gender_SILC.xlsx"
+export excel "$output/AROP_ECONSTATUS_GENDER_SILC.xlsx", replace sheet("By_EconStatus_Gender") firstrow(variables)
+di "Analysis 3 saved: AROP_ECONSTATUS_GENDER_SILC.xlsx"
 
 di _n "==============================================================================="
 di "ALL ANALYSES COMPLETE - EU-SILC"
-di "==============================================================================="
-di "Output files:"
-di "  1. arop_by_economic_status_SILC.xlsx"
-di "  2. arop_by_gender_SILC.xlsx"
-di "  3. arop_by_economic_status_and_gender_SILC.xlsx"
 di "==============================================================================="
