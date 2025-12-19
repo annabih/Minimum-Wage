@@ -206,29 +206,34 @@ foreach yr of local years {
     local n_poor_`yr' = r(sum)
     drop temp_poor_`yr'
     
-    * Poverty line
+    * Poverty line (annual and monthly)
     sum pov_threshold_60 if year == `yr', meanonly
     local pov_line_`yr' = r(mean)
+    local pov_line_month_`yr' = r(mean) / 12
     
-    * Median income
+    * Median income (annual and monthly)
     sum median_eq_hh_ils_dispy if year == `yr', meanonly
     local median_inc_`yr' = r(mean)
+    local median_inc_month_`yr' = r(mean) / 12
     
-    * Mean income (use aw)
+    * Mean income (annual and monthly, use aw)
     sum eq_hh_ils_dispy [aw=dwt] if year == `yr'
     local mean_inc_`yr' = r(mean)
+    local mean_inc_month_`yr' = r(mean) / 12
     
-    * Poverty gaps (use aw)
+    * Poverty gaps (annual and monthly, use aw)
     quietly count if year == `yr' & arop == 1
     if r(N) > 0 {
         sum arop_gap_abs [aw=dwt] if year == `yr' & arop == 1
         local gap_abs_`yr' = r(mean)
+        local gap_abs_month_`yr' = r(mean) / 12
         
         sum arop_gap_rel [aw=dwt] if year == `yr' & arop == 1
         local gap_rel_`yr' = r(mean)
     }
     else {
         local gap_abs_`yr' = .
+        local gap_abs_month_`yr' = .
         local gap_rel_`yr' = .
     }
     
@@ -242,7 +247,7 @@ foreach yr of local years {
 di _n "=== Creating Excel output ===" _n
 
 clear
-set obs 10
+set obs 20
 
 gen str50 Variable = ""
 foreach yr of local years {
@@ -269,28 +274,67 @@ foreach yr of local years {
 }
 local row = `row' + 1
 
-replace Variable = "Poverty line (Euro)" in `row'
+replace Variable = "" in `row'
+local row = `row' + 1
+
+replace Variable = "Poverty line (Euro, annual)" in `row'
 foreach yr of local years {
     replace Value_`yr' = `pov_line_`yr'' in `row'
 }
 local row = `row' + 1
 
-replace Variable = "Median equiv. income (Euro)" in `row'
+replace Variable = "Poverty line (Euro, monthly)" in `row'
+foreach yr of local years {
+    replace Value_`yr' = `pov_line_month_`yr'' in `row'
+}
+local row = `row' + 1
+
+replace Variable = "" in `row'
+local row = `row' + 1
+
+replace Variable = "Median equiv. income (Euro, annual)" in `row'
 foreach yr of local years {
     replace Value_`yr' = `median_inc_`yr'' in `row'
 }
 local row = `row' + 1
 
-replace Variable = "Mean equiv. income (Euro)" in `row'
+replace Variable = "Median equiv. income (Euro, monthly)" in `row'
+foreach yr of local years {
+    replace Value_`yr' = `median_inc_month_`yr'' in `row'
+}
+local row = `row' + 1
+
+replace Variable = "" in `row'
+local row = `row' + 1
+
+replace Variable = "Mean equiv. income (Euro, annual)" in `row'
 foreach yr of local years {
     replace Value_`yr' = `mean_inc_`yr'' in `row'
 }
 local row = `row' + 1
 
-replace Variable = "Avg poverty gap (Euro)" in `row'
+replace Variable = "Mean equiv. income (Euro, monthly)" in `row'
+foreach yr of local years {
+    replace Value_`yr' = `mean_inc_month_`yr'' in `row'
+}
+local row = `row' + 1
+
+replace Variable = "" in `row'
+local row = `row' + 1
+
+replace Variable = "Avg poverty gap (Euro, annual)" in `row'
 foreach yr of local years {
     replace Value_`yr' = `gap_abs_`yr'' in `row'
 }
+local row = `row' + 1
+
+replace Variable = "Avg poverty gap (Euro, monthly)" in `row'
+foreach yr of local years {
+    replace Value_`yr' = `gap_abs_month_`yr'' in `row'
+}
+local row = `row' + 1
+
+replace Variable = "" in `row'
 local row = `row' + 1
 
 replace Variable = "Avg poverty gap (Percent)" in `row'
@@ -319,6 +363,7 @@ di "OVERALL POVERTY ANALYSIS COMPLETE - EU-SILC 2015-2023"
 di "==============================================================================="
 di "Income variable: HX090 (Eurostat equivalised disposable income)"
 di "Weights: pw=dwt for percentiles, aw=dwt for means/sums"
+di "Note: Monthly values = Annual values / 12"
 di "==============================================================================="
 
 * Display results
