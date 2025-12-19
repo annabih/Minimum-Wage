@@ -2,6 +2,7 @@
 *** Titel: AROP Analysis by Economic Status and Gender - EU-SILC Austria 2015-2023
 *** Date: 19.12.2024
 *** Aim: Overall poverty rate by economic status, gender, and combination
+*** Note: PL031 until 2019, PL032 from 2020 onwards
 *******************************************************************************************************************************************************************************************
 clear all
 set more off
@@ -19,7 +20,7 @@ di _n "=== Original observations: " _N " ===" _n
 
 di _n "=== Destringing variables ===" _n
 
-local numeric_vars "HX090 RB050 PB040 RX010 PX010 PL031 RB090 year"
+local numeric_vars "HX090 RB050 PB040 RX010 PX010 PL031 PL032 RB090 year"
 
 foreach var of local numeric_vars {
     capture confirm variable `var'
@@ -73,29 +74,36 @@ else {
     gen gender = .
 }
 
-* Economic status (PL031 - Self-defined current economic status)
+* Economic status - Use PL031 for 2015-2019, PL032 for 2020-2023
+gen econ_status_raw = .
+
 capture confirm variable PL031
 if _rc == 0 {
-    gen econ_status = PL031
-    label define econ_lbl 1 "Working FT" 2 "Working PT" 3 "Unemployed" 4 "Student" 5 "Retired" 6 "Disabled" 7 "Military/CS" 8 "Domestic tasks" 9 "Other"
-    label values econ_status econ_lbl
-    label variable econ_status "Economic status (self-defined)"
-    
-    * Create simplified categories
-    gen econ_cat = .
-    replace econ_cat = 1 if inlist(econ_status, 1, 2)  
-    replace econ_cat = 2 if econ_status == 3         
-    replace econ_cat = 3 if econ_status == 5          
-    replace econ_cat = 4 if econ_status == 4         
-    replace econ_cat = 5 if inlist(econ_status, 6, 7, 8, 9) 
-    label define econ_cat_lbl 1 "Working" 2 "Unemployed" 3 "Retired" 4 "Student" 5 "Other inactive"
-    label values econ_cat econ_cat_lbl
-    label variable econ_cat "Economic status (simplified)"
+    replace econ_status_raw = PL031 if year <= 2019 & !missing(PL031)
+    di "Using PL031 for years 2015-2019"
 }
-else {
-    di as error "WARNING: Economic status variable PL031 not found!"
-    gen econ_cat = .
+
+capture confirm variable PL032
+if _rc == 0 {
+    replace econ_status_raw = PL032 if year >= 2020 & !missing(PL032)
+    di "Using PL032 for years 2020-2023"
 }
+
+* Create simplified economic status categories
+gen econ_cat = .
+replace econ_cat = 1 if inlist(econ_status_raw, 1, 2)       
+replace econ_cat = 2 if econ_status_raw == 3                 
+replace econ_cat = 3 if econ_status_raw == 5               
+replace econ_cat = 4 if econ_status_raw == 4                 
+replace econ_cat = 5 if inlist(econ_status_raw, 6, 7, 8, 9) 
+
+label define econ_cat_lbl 1 "Working" 2 "Unemployed" 3 "Retired" 4 "Student" 5 "Other inactive"
+label values econ_cat econ_cat_lbl
+label variable econ_cat "Economic status (simplified)"
+
+* Check distribution by year
+di _n "=== Economic status distribution by year ===" _n
+tab year econ_cat [aw=dwt], missing row
 
 * Equivalised disposable income
 gen eq_hh_ils_dispy = HX090
@@ -151,7 +159,12 @@ di _n "=== Analysis 1: AROP by Economic Status ===" _n
 
 foreach yr of local years {
     quietly count if year == `yr'
-    if r(N) == 0 continue
+    if r(N) == 0 {
+        di "Year `yr': No observations"
+        continue
+    }
+    
+    di "Processing year `yr'..."
     
     forvalues ec = 1/5 {
         quietly count if year == `yr' & econ_cat == `ec'
@@ -161,17 +174,20 @@ foreach yr of local years {
             
             sum dwt if year == `yr' & econ_cat == `ec'
             local n_ec`ec'_`yr' = r(sum)
+            
+            di "  Econ cat `ec': AROP=" %5.2f `arop_ec`ec'_`yr'' "%, N=" %12.0fc `n_ec`ec'_`yr''
         }
         else {
             local arop_ec`ec'_`yr' = .
             local n_ec`ec'_`yr' = .
+            di "  Econ cat `ec': No data"
         }
     }
 }
 
 * Create output 1
 clear
-set obs 12
+set obs 22
 
 gen str50 Variable = ""
 foreach yr of local years {
@@ -180,65 +196,32 @@ foreach yr of local years {
 
 local row = 1
 
-replace Variable = "=== WORKING ===" in `row'
-local row = `row' + 1
-
-replace Variable = "AROP rate (%)" in `row'
-foreach yr of local years {
-    replace Value_`yr' = `arop_ec1_`yr'' in `row'
+forvalues ec = 1/5 {
+    
+    local ec_name "Working"
+    if `ec' == 2 local ec_name "Unemployed"
+    if `ec' == 3 local ec_name "Retired"
+    if `ec' == 4 local ec_name "Student"
+    if `ec' == 5 local ec_name "Other inactive"
+    
+    replace Variable = "=== `ec_name' ===" in `row'
+    local row = `row' + 1
+    
+    replace Variable = "AROP rate (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `arop_ec`ec'_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Population" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `n_ec`ec'_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "" in `row'
+    local row = `row' + 1
 }
-local row = `row' + 1
-
-replace Variable = "Population" in `row'
-foreach yr of local years {
-    replace Value_`yr' = `n_ec1_`yr'' in `row'
-}
-local row = `row' + 1
-
-replace Variable = "=== UNEMPLOYED ===" in `row'
-local row = `row' + 1
-
-replace Variable = "AROP rate (%)" in `row'
-foreach yr of local years {
-    replace Value_`yr' = `arop_ec2_`yr'' in `row'
-}
-local row = `row' + 1
-
-replace Variable = "Population" in `row'
-foreach yr of local years {
-    replace Value_`yr' = `n_ec2_`yr'' in `row'
-}
-local row = `row' + 1
-
-replace Variable = "=== RETIRED ===" in `row'
-local row = `row' + 1
-
-replace Variable = "AROP rate (%)" in `row'
-foreach yr of local years {
-    replace Value_`yr' = `arop_ec3_`yr'' in `row'
-}
-local row = `row' + 1
-
-replace Variable = "Population" in `row'
-foreach yr of local years {
-    replace Value_`yr' = `n_ec3_`yr'' in `row'
-}
-local row = `row' + 1
-
-replace Variable = "=== STUDENT ===" in `row'
-local row = `row' + 1
-
-replace Variable = "AROP rate (%)" in `row'
-foreach yr of local years {
-    replace Value_`yr' = `arop_ec4_`yr'' in `row'
-}
-local row = `row' + 1
-
-replace Variable = "Population" in `row'
-foreach yr of local years {
-    replace Value_`yr' = `n_ec4_`yr'' in `row'
-}
-local row = `row' + 1
 
 keep if Variable != ""
 
@@ -261,6 +244,8 @@ foreach yr of local years {
     quietly count if year == `yr'
     if r(N) == 0 continue
     
+    di "Processing year `yr'..."
+    
     forvalues g = 1/2 {
         quietly count if year == `yr' & gender == `g'
         if r(N) > 0 {
@@ -269,6 +254,8 @@ foreach yr of local years {
             
             sum dwt if year == `yr' & gender == `g'
             local n_g`g'_`yr' = r(sum)
+            
+            di "  Gender `g': AROP=" %5.2f `arop_g`g'_`yr'' "%, N=" %12.0fc `n_g`g'_`yr''
         }
         else {
             local arop_g`g'_`yr' = .
@@ -279,7 +266,7 @@ foreach yr of local years {
 
 * Create output 2
 clear
-set obs 6
+set obs 8
 
 gen str50 Variable = ""
 foreach yr of local years {
@@ -301,6 +288,9 @@ replace Variable = "Population" in `row'
 foreach yr of local years {
     replace Value_`yr' = `n_g1_`yr'' in `row'
 }
+local row = `row' + 1
+
+replace Variable = "" in `row'
 local row = `row' + 1
 
 replace Variable = "=== FEMALE ===" in `row'
@@ -339,6 +329,8 @@ foreach yr of local years {
     quietly count if year == `yr'
     if r(N) == 0 continue
     
+    di "Processing year `yr'..."
+    
     forvalues ec = 1/5 {
         forvalues g = 1/2 {
             quietly count if year == `yr' & econ_cat == `ec' & gender == `g'
@@ -359,7 +351,7 @@ foreach yr of local years {
 
 * Create output 3
 clear
-set obs 32
+set obs 35
 
 gen str50 Variable = ""
 foreach yr of local years {
@@ -418,4 +410,11 @@ di "Analysis 3 saved: AROP_ECONSTATUS_GENDER_SILC.xlsx"
 
 di _n "==============================================================================="
 di "ALL ANALYSES COMPLETE - EU-SILC"
+di "==============================================================================="
+di "Output files:"
+di "  1. arop_by_economic_status_SILC.xlsx"
+di "  2. arop_by_gender_SILC.xlsx"
+di "  3. arop_by_economic_status_and_gender_SILC.xlsx"
+di ""
+di "Note: Using PL031 for 2015-2019, PL032 for 2020-2023"
 di "==============================================================================="
