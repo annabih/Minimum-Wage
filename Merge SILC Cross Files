@@ -1,0 +1,42 @@
+cd "C:\Users\ALochbih\OneDrive - Bundesarbeitskammer\Desktop\Data\AT_CROSS\2022"
+
+* H-Datei importieren (Household-Level)
+import delimited "UDB_cAT22H.csv", delimiter(",") clear case(preserve)
+rename HB030 household_id
+tempfile household
+save `household'
+
+* D-Datei importieren (Household-Level!)
+import delimited "UDB_cAT22D.csv", delimiter(",") clear case(preserve)
+rename DB030 household_id
+tempfile demographic_hh
+save `demographic_hh'
+
+* R-Datei importieren (Personal-Level)
+import delimited "UDB_cAT22R.csv", delimiter(",") clear case(preserve)
+rename RB030 person_id
+rename RX030 household_id
+tempfile register
+save `register'
+
+* P-Datei importieren (Personal-Level) - als Master
+import delimited "UDB_cAT22P.csv", delimiter(",") clear case(preserve)
+rename PB030 person_id
+rename PX030 household_id
+
+* Merge Personal-Level Dateien nach person_id
+merge 1:1 person_id using `register'
+tab _merge
+drop _merge
+
+* Merge Household-Level Dateien nach household_id (m:1!)
+merge m:1 household_id using `household'
+tab _merge
+drop _merge
+
+merge m:1 household_id using `demographic_hh'
+tab _merge
+drop _merge
+
+* Speichern
+save "AT22_merged.dta", replace
