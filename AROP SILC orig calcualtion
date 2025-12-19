@@ -8,7 +8,7 @@ clear all
 set more off
 
 use "C:\Users\ALochbih\OneDrive - Bundesarbeitskammer\Desktop\EUROMOD\InWorkPoverty\Robustness\SILC_CrossSec_AllYears_2015_2023.dta"
-global output "C:\Users\ALochbih\OneDrive - Bundesarbeitskammer\Desktop\EUROMOD\InWorkPoverty\Robustness"
+global output "C:\Users\ALochbih\OneDrive - Bundesarbeitskammer\Desktop\EUROMOD\InWorkPoverty\Ergebnisse"
 
 local years "2015 2016 2017 2018 2019 2020 2021 2022 2023"
 
@@ -354,7 +354,7 @@ di _n "=== Exporting to Excel ===" _n
 
 capture mkdir "$output"
 
-export excel "$output/poverty_analysis_SILC_AllYears.xlsx", replace sheet("Poverty_ByYear") firstrow(variables)
+export excel "$output/AROP_SILC_ORIG.xlsx", replace sheet("Poverty_ByYear") firstrow(variables)
 
 di as result "File saved successfully!"
 
