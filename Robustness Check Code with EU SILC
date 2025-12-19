@@ -1,0 +1,422 @@
+*******************************************************************************************************************************************************************************************
+*** Titel: Distributive Effects Analysis - EU-SILC Austria 2022 (Manual Equivalisation)
+*** Date: 19.12.2024
+*** Aim: Overall poverty rate calculation using HY020 and manual equivalisation with Modified OECD scale
+*******************************************************************************************************************************************************************************************
+clear all
+set more off
+
+cd "C:\Users\ALochbih\OneDrive - Bundesarbeitskammer\Desktop\Data\AT_CROSS\2022"
+
+* Load merged data
+use "AT22_merged.dta", clear
+
+global output "C:\Users\ALochbih\OneDrive - Bundesarbeitskammer\Desktop\Data\AT_CROSS\2022\Results"
+
+di _n "=== Original observations: " _N " ===" _n
+
+***********************************************
+* DESTRING ALL NUMERIC VARIABLES
+***********************************************
+
+di _n "=== Destringing variables ===" _n
+
+* List of variables that should be numeric
+local numeric_vars "HY020 RB050 PB040 RX010 PX010 HX090"
+
+foreach var of local numeric_vars {
+    capture confirm variable `var'
+    if _rc == 0 {
+        capture confirm string variable `var'
+        if _rc == 0 {
+            di "Converting `var' from string to numeric..."
+            replace `var' = subinstr(`var', ",", ".", .)
+            destring `var', replace force
+            di "  -> `var' converted"
+        }
+        else {
+            di "`var' is already numeric"
+        }
+    }
+    else {
+        di as text "  `var' not found (skipping)"
+    }
+}
+
+***********************************************
+* VARIABLE PREPARATION
+***********************************************
+
+di _n "=== Preparing variables ===" _n
+
+* Year
+gen year = 2022
+label variable year "Survey year"
+
+* Personal weight (use RB050 from R-file or PB040 from P-file)
+capture confirm variable RB050
+if _rc == 0 {
+    gen dwt = RB050
+    di "Using RB050 for weights"
+}
+else {
+    capture confirm variable PB040
+    if _rc == 0 {
+        gen dwt = PB040
+        di "Using PB040 for weights"
+    }
+    else {
+        di as error "ERROR: No weight variable found (RB050 or PB040)!"
+        error 111
+    }
+}
+label variable dwt "Personal cross-sectional weight"
+
+* Age (use RX010 from R-file or PX010 from P-file)
+capture confirm variable RX010
+if _rc == 0 {
+    gen age = RX010
+    di "Using RX010 for age"
+}
+else {
+    capture confirm variable PX010
+    if _rc == 0 {
+        gen age = PX010
+        di "Using PX010 for age"
+    }
+    else {
+        di as error "ERROR: No age variable found (RX010 or PX010)!"
+        error 111
+    }
+}
+label variable age "Age"
+
+* Household disposable income (HY020 from H-file)
+capture confirm variable HY020
+if _rc == 0 {
+    bysort household_id: egen hh_disp_inc = max(HY020)
+    di "Using HY020 for household disposable income"
+}
+else {
+    di as error "ERROR: HY020 (household disposable income) not found!"
+    error 111
+}
+label variable hh_disp_inc "Household disposable income (HY020)"
+
+* Also keep HX090 for comparison
+capture confirm variable HX090
+if _rc == 0 {
+    gen eq_hh_inc_eurostat = HX090
+    label variable eq_hh_inc_eurostat "Equivalised income (Eurostat HX090)"
+}
+
+* Check for missing values
+di _n "=== Checking for missing values ===" _n
+count if missing(hh_disp_inc)
+di "Missing household income: " r(N)
+count if missing(dwt)
+di "Missing weights: " r(N)
+count if missing(age)
+di "Missing age: " r(N)
+
+* Drop observations with missing key variables
+drop if missing(hh_disp_inc) | missing(dwt) | missing(age) | missing(household_id)
+di _n "Observations after dropping missing: " _N _n
+
+*************************************************************
+* CALCULATE EQUIVALIZED HOUSEHOLD INCOME (Modified OECD Scale)
+*************************************************************
+
+di _n "=== Calculating equivalised household income manually ===" _n
+di "=== Using Modified OECD scale ===" _n
+
+capture drop eq_weight
+capture drop ref_person
+capture drop row_num
+capture drop is_adult
+capture drop adult_cumsum
+
+* Generate row number within each household (preserving original order)
+sort household_id person_id
+bysort household_id: gen row_num = _n
+
+* Step 1: Find first adult (age >= 14) in each household
+bysort household_id: gen is_adult = (age >= 14)
+bysort household_id: gen adult_cumsum = sum(is_adult)
+gen ref_person = (is_adult == 1 & adult_cumsum == 1)
+
+* Step 2: Assign equivalence weights (Modified OECD Scale)
+gen eq_weight = .
+
+* First adult in household -> weight 1.0
+replace eq_weight = 1.0 if ref_person == 1
+
+* Other adults (age >= 14) get weight 0.5
+replace eq_weight = 0.5 if age >= 14 & ref_person == 0
+
+* Children (age < 14) get weight 0.3
+replace eq_weight = 0.3 if age < 14
+
+label variable ref_person "Reference person (first adult age >= 14)"
+label variable eq_weight "Equivalence weight (Modified OECD)"
+
+* Step 3: Calculate household equivalence factor (sum of all weights in HH)
+bysort household_id: egen hh_eq_weight = total(eq_weight)
+label variable hh_eq_weight "Household equivalence factor (sum of OECD weights)"
+
+* Step 4: Calculate equivalised household income
+gen eq_hh_inc_manual = hh_disp_inc / hh_eq_weight
+label variable eq_hh_inc_manual "Equivalised HH income (manual calculation)"
+
+di _n "=== Summary of equivalisation ===" _n
+sum hh_disp_inc hh_eq_weight eq_hh_inc_manual
+
+* Check household size distribution
+bysort household_id: gen hh_size = _N
+tab hh_size [aw=dwt]
+
+* Compare manual calculation with Eurostat's HX090 if available
+capture confirm variable eq_hh_inc_eurostat
+if _rc == 0 {
+    di _n "=== Comparison: Manual vs Eurostat equivalisation ===" _n
+    gen diff_euq = eq_hh_inc_manual - eq_hh_inc_eurostat
+    gen diff_euq_pct = (diff_euq / eq_hh_inc_eurostat) * 100
+    
+    sum eq_hh_inc_manual eq_hh_inc_eurostat diff_euq diff_euq_pct
+    
+    di _n "Correlation between manual and Eurostat equivalised income:"
+    corr eq_hh_inc_manual eq_hh_inc_eurostat
+}
+
+****************************************
+* Calculate poverty threshold (60% of median)
+****************************************
+
+di _n "=== Calculating poverty threshold ===" _n
+
+quietly _pctile eq_hh_inc_manual [pw=dwt], p(50)
+local median_val = r(r1)
+local pov_threshold = 0.60 * `median_val'
+
+gen double pov_threshold_60 = `pov_threshold'
+label variable pov_threshold_60 "Poverty threshold (60% of median)"
+
+gen double median_eq_hh_inc = `median_val'
+label variable median_eq_hh_inc "Median equivalised HH income"
+
+di "Median equivalised income: " %12.2f `median_val'
+di "Poverty threshold (60%):   " %12.2f `pov_threshold'
+
+* Compare with Eurostat threshold if available
+capture confirm variable eq_hh_inc_eurostat
+if _rc == 0 {
+    quietly _pctile eq_hh_inc_eurostat [pw=dwt], p(50)
+    local median_eurostat = r(r1)
+    local pov_threshold_eurostat = 0.60 * `median_eurostat'
+    
+    di _n "=== Comparison with Eurostat ===" _n
+    di "Manual calculation:"
+    di "  Median: €" %12.2f `median_val'
+    di "  Threshold: €" %12.2f `pov_threshold'
+    di "Eurostat (HX090):"
+    di "  Median: €" %12.2f `median_eurostat'
+    di "  Threshold: €" %12.2f `pov_threshold_eurostat'
+    di "Difference: €" %12.2f (`pov_threshold' - `pov_threshold_eurostat')
+}
+
+****************************************
+* Generate poverty status (individual level)
+****************************************
+
+di _n "=== Identifying poverty status ===" _n
+
+* At risk of poverty indicator
+gen byte arop = .
+replace arop = 1 if eq_hh_inc_manual < pov_threshold_60 & !missing(pov_threshold_60) & !missing(eq_hh_inc_manual)
+replace arop = 0 if eq_hh_inc_manual >= pov_threshold_60 & !missing(pov_threshold_60) & !missing(eq_hh_inc_manual)
+label variable arop "At-risk-of-poverty (60% median eq HH disposable income)"
+
+* Poverty gap absolute
+gen double arop_gap_abs = .
+replace arop_gap_abs = pov_threshold_60 - eq_hh_inc_manual if arop == 1
+label variable arop_gap_abs "Poverty gap absolute (eq HH disposable income)"
+
+* Poverty gap relative (%)
+gen double arop_gap_rel = .
+replace arop_gap_rel = ((pov_threshold_60 - eq_hh_inc_manual) / pov_threshold_60) * 100 if arop == 1
+label variable arop_gap_rel "Relative poverty gap (% of 60% median eq HH income)"
+
+* Age groups
+gen age_group = .
+replace age_group = 1 if age < 18
+replace age_group = 2 if age >= 18 & age < 65
+replace age_group = 3 if age >= 65 & !missing(age)
+label define age_lbl 1 "Children (<18)" 2 "Working age (18-64)" 3 "Elderly (65+)"
+label values age_group age_lbl
+label variable age_group "Age group"
+
+di "Poverty status identified"
+di "Total observations: " _N
+
+* Quick check
+di _n "=== Poverty rate by manual calculation ===" _n
+tab arop [aw=dwt]
+tab age_group arop [aw=dwt], row nofreq
+
+* Compare with Eurostat if available
+capture confirm variable eq_hh_inc_eurostat
+if _rc == 0 {
+    quietly _pctile eq_hh_inc_eurostat [pw=dwt], p(50)
+    local median_eurostat = r(r1)
+    local pov_threshold_eurostat = 0.60 * `median_eurostat'
+    
+    gen byte arop_eurostat = .
+    replace arop_eurostat = 1 if eq_hh_inc_eurostat < `pov_threshold_eurostat' & !missing(eq_hh_inc_eurostat)
+    replace arop_eurostat = 0 if eq_hh_inc_eurostat >= `pov_threshold_eurostat' & !missing(eq_hh_inc_eurostat)
+    
+    di _n "=== Poverty rate comparison ===" _n
+    di "Manual calculation:"
+    sum arop [aw=dwt]
+    local pov_manual = r(mean) * 100
+    di "  Poverty rate: " %5.2f `pov_manual' "%"
+    
+    di "Eurostat (HX090):"
+    sum arop_eurostat [aw=dwt]
+    local pov_eurostat = r(mean) * 100
+    di "  Poverty rate: " %5.2f `pov_eurostat' "%"
+    
+    di "Difference: " %5.2f (`pov_manual' - `pov_eurostat') " percentage points"
+}
+
+sum arop_gap_abs arop_gap_rel if arop == 1 [aw=dwt]
+
+***************************************
+* Save micro-level data
+***************************************
+
+capture mkdir "$output"
+save "$output/poverty_microdata_AT2022_manual.dta", replace
+di "Micro-level data saved"
+
+***************************************
+* Calculate statistics BEFORE clearing
+***************************************
+
+di _n "=== Calculating overall statistics ===" _n
+
+* Calculate weighted statistics
+sum arop [aw=dwt]
+local pov_rate = r(mean) * 100
+
+sum dwt
+local n_total = r(sum)
+
+gen weighted_poor = arop * dwt
+sum weighted_poor
+local n_poor = r(sum)
+
+sum pov_threshold_60, meanonly
+local pov_line = r(mean)
+
+sum median_eq_hh_inc, meanonly
+local median_inc = r(mean)
+
+sum arop_gap_abs if arop == 1 [aw=dwt]
+local gap_abs = r(mean)
+
+sum arop_gap_rel if arop == 1 [aw=dwt]
+local gap_rel = r(mean)
+
+sum eq_hh_inc_manual [aw=dwt]
+local mean_inc = r(mean)
+
+sum hh_eq_weight [aw=dwt]
+local mean_eq_weight = r(mean)
+
+*===============================================================================
+* CREATE FORMATTED OUTPUT
+*===============================================================================
+
+di _n "=== Creating formatted output ===" _n
+
+clear
+set obs 25
+gen str50 Variable = ""
+gen Austria_2022 = .
+
+local row = 1
+replace Variable = "Austria 2022 - Manual Equivalisation" in `row'
+local row = `row' + 1
+
+replace Variable = "Method: Modified OECD Scale" in `row'
+local row = `row' + 1
+
+replace Variable = "" in `row'
+local row = `row' + 1
+
+replace Variable = "Poverty rate (%)" in `row'
+replace Austria_2022 = `pov_rate' in `row'
+local row = `row' + 1
+
+replace Variable = "Total population" in `row'
+replace Austria_2022 = `n_total' in `row'
+local row = `row' + 1
+
+replace Variable = "Poverty line (Euro)" in `row'
+replace Austria_2022 = `pov_line' in `row'
+local row = `row' + 1
+
+replace Variable = "Median equiv. income (Euro)" in `row'
+replace Austria_2022 = `median_inc' in `row'
+local row = `row' + 1
+
+replace Variable = "Mean equiv. income (Euro)" in `row'
+replace Austria_2022 = `mean_inc' in `row'
+local row = `row' + 1
+
+replace Variable = "Mean equivalence weight" in `row'
+replace Austria_2022 = `mean_eq_weight' in `row'
+local row = `row' + 1
+
+replace Variable = "" in `row'
+local row = `row' + 1
+
+replace Variable = "Number poor" in `row'
+replace Austria_2022 = `n_poor' in `row'
+local row = `row' + 1
+
+replace Variable = "Avg poverty gap (Euro)" in `row'
+replace Austria_2022 = `gap_abs' in `row'
+local row = `row' + 1
+
+replace Variable = "Avg poverty gap (Percent)" in `row'
+replace Austria_2022 = `gap_rel' in `row'
+local row = `row' + 1
+
+keep if Variable != ""
+
+format Austria_2022 %15.2f
+
+di _n "=== Exporting to Excel ===" _n
+
+export excel "$output/poverty_analysis_AT2022_manual.xlsx", replace sheet("Poverty_Manual") firstrow(variables)
+
+di as result "File saved successfully!"
+
+di _n "==============================================================================="
+di "ANALYSIS COMPLETE - MANUAL EQUIVALISATION"
+di "==============================================================================="
+di "Method: Modified OECD Scale"
+di "  First adult (14+): 1.0"
+di "  Other adults (14+): 0.5"
+di "  Children (<14): 0.3"
+di ""
+di "Results:"
+di "  Poverty rate: " %5.2f `pov_rate' "%"
+di "  Number poor: " %12.0fc `n_poor'
+di "  Total population: " %12.0fc `n_total'
+di "  Poverty line: €" %10.2f `pov_line'
+di "  Median income: €" %10.2f `median_inc'
+di "  Mean income: €" %10.2f `mean_inc'
+di "  Mean equiv. weight: " %5.2f `mean_eq_weight'
+di "==============================================================================="
