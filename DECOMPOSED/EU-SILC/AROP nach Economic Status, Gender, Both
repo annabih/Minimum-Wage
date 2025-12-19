@@ -1,0 +1,427 @@
+*******************************************************************************************************************************************************************************************
+*** Titel: AROP Analysis by Economic Status and Gender - EU-SILC Austria 2015-2023
+*** Date: 19.12.2024
+*** Aim: Overall poverty rate by economic status, gender, and combination
+*******************************************************************************************************************************************************************************************
+clear all
+set more off
+
+use "C:\Users\ALochbih\OneDrive - Bundesarbeitskammer\Desktop\EUROMOD\InWorkPoverty\Robustness\SILC_CrossSec_AllYears_2015_2023.dta"
+global output "C:\Users\ALochbih\OneDrive - Bundesarbeitskammer\Desktop\EUROMOD\InWorkPoverty\Robustness"
+
+local years "2015 2016 2017 2018 2019 2020 2021 2022 2023"
+
+di _n "=== Original observations: " _N " ===" _n
+
+***********************************************
+* DESTRING ALL NUMERIC VARIABLES
+***********************************************
+
+di _n "=== Destringing variables ===" _n
+
+local numeric_vars "HX090 RB050 PB040 RX010 PX010 PL031 RB090 year"
+
+foreach var of local numeric_vars {
+    capture confirm variable `var'
+    if _rc == 0 {
+        capture confirm string variable `var'
+        if _rc == 0 {
+            di "Converting `var' from string to numeric..."
+            replace `var' = subinstr(`var', ",", ".", .)
+            destring `var', replace force
+            di "  -> `var' converted"
+        }
+    }
+}
+
+***********************************************
+* VARIABLE PREPARATION
+***********************************************
+
+di _n "=== Preparing variables ===" _n
+
+* Personal weight
+capture confirm variable RB050
+if _rc == 0 {
+    gen dwt = RB050
+}
+else {
+    gen dwt = PB040
+}
+label variable dwt "Personal cross-sectional weight"
+
+* Age
+capture confirm variable RX010
+if _rc == 0 {
+    gen age = RX010
+}
+else {
+    gen age = PX010
+}
+label variable age "Age"
+
+* Gender (RB090)
+capture confirm variable RB090
+if _rc == 0 {
+    gen gender = RB090
+    label define gender_lbl 1 "Male" 2 "Female"
+    label values gender gender_lbl
+    label variable gender "Gender"
+}
+else {
+    di as error "WARNING: Gender variable RB090 not found!"
+    gen gender = .
+}
+
+* Economic status (PL031 - Self-defined current economic status)
+capture confirm variable PL031
+if _rc == 0 {
+    gen econ_status = PL031
+    label define econ_lbl 1 "Working FT" 2 "Working PT" 3 "Unemployed" 4 "Student" ///
+                          5 "Retired" 6 "Disabled" 7 "Military/CS" 8 "Domestic tasks" 9 "Other"
+    label values econ_status econ_lbl
+    label variable econ_status "Economic status (self-defined)"
+    
+    * Create simplified categories
+    gen econ_cat = .
+    replace econ_cat = 1 if inlist(econ_status, 1, 2)  // Working
+    replace econ_cat = 2 if econ_status == 3           // Unemployed
+    replace econ_cat = 3 if econ_status == 5           // Retired
+    replace econ_cat = 4 if econ_status == 4           // Student
+    replace econ_cat = 5 if inlist(econ_status, 6, 7, 8, 9)  // Other inactive
+    label define econ_cat_lbl 1 "Working" 2 "Unemployed" 3 "Retired" 4 "Student" 5 "Other inactive"
+    label values econ_cat econ_cat_lbl
+    label variable econ_cat "Economic status (simplified)"
+}
+else {
+    di as error "WARNING: Economic status variable PL031 not found!"
+    gen econ_cat = .
+}
+
+* Equivalised disposable income
+gen eq_hh_ils_dispy = HX090
+label variable eq_hh_ils_dispy "Equivalised income (Eurostat HX090)"
+
+* Drop missing values
+drop if missing(eq_hh_ils_dispy) | missing(dwt) | missing(age)
+di _n "Observations after dropping missing: " _N _n
+
+****************************************
+* Calculate poverty threshold per year
+****************************************
+tempfile thresholds
+tempname h
+
+postfile `h' int year double median_eq_hh_ils_dispy pov_threshold_60 using `thresholds', replace
+
+foreach yr of local years {
+    quietly count if year==`yr'
+    if r(N)==0 continue
+    quietly _pctile eq_hh_ils_dispy [pw=dwt] if year==`yr', p(50)
+    local median_val = r(r1)
+    post `h' (`yr') (`median_val') (0.60*`median_val')
+}
+
+postclose `h'
+
+merge m:1 year using `thresholds', nogen
+
+****************************************
+* Generate poverty status
+****************************************
+
+gen byte arop = .
+replace arop = 1 if eq_hh_ils_dispy < pov_threshold_60 & !missing(pov_threshold_60)
+replace arop = 0 if eq_hh_ils_dispy >= pov_threshold_60 & !missing(pov_threshold_60)
+label variable arop "At-risk-of-poverty (60% median)"
+
+di "Poverty status identified"
+di "Total observations: " _N
+
+***************************************
+* Save base microdata
+***************************************
+
+save "$output/arop_by_groups_microdata_SILC.dta", replace
+
+***************************************
+* ANALYSIS 1: BY ECONOMIC STATUS
+***************************************
+
+di _n "=== Analysis 1: AROP by Economic Status ===" _n
+
+foreach yr of local years {
+    quietly count if year == `yr'
+    if r(N) == 0 continue
+    
+    forvalues ec = 1/5 {
+        quietly count if year == `yr' & econ_cat == `ec'
+        if r(N) > 0 {
+            sum arop [aw=dwt] if year == `yr' & econ_cat == `ec'
+            local arop_ec`ec'_`yr' = r(mean) * 100
+            
+            sum dwt if year == `yr' & econ_cat == `ec'
+            local n_ec`ec'_`yr' = r(sum)
+        }
+        else {
+            local arop_ec`ec'_`yr' = .
+            local n_ec`ec'_`yr' = .
+        }
+    }
+}
+
+* Create output 1
+clear
+set obs 12
+
+gen str50 Variable = ""
+foreach yr of local years {
+    gen Value_`yr' = .
+}
+
+local row = 1
+
+replace Variable = "=== WORKING ===" in `row'
+local row = `row' + 1
+
+replace Variable = "AROP rate (%)" in `row'
+foreach yr of local years {
+    replace Value_`yr' = `arop_ec1_`yr'' in `row'
+}
+local row = `row' + 1
+
+replace Variable = "Population" in `row'
+foreach yr of local years {
+    replace Value_`yr' = `n_ec1_`yr'' in `row'
+}
+local row = `row' + 1
+
+replace Variable = "=== UNEMPLOYED ===" in `row'
+local row = `row' + 1
+
+replace Variable = "AROP rate (%)" in `row'
+foreach yr of local years {
+    replace Value_`yr' = `arop_ec2_`yr'' in `row'
+}
+local row = `row' + 1
+
+replace Variable = "Population" in `row'
+foreach yr of local years {
+    replace Value_`yr' = `n_ec2_`yr'' in `row'
+}
+local row = `row' + 1
+
+replace Variable = "=== RETIRED ===" in `row'
+local row = `row' + 1
+
+replace Variable = "AROP rate (%)" in `row'
+foreach yr of local years {
+    replace Value_`yr' = `arop_ec3_`yr'' in `row'
+}
+local row = `row' + 1
+
+replace Variable = "Population" in `row'
+foreach yr of local years {
+    replace Value_`yr' = `n_ec3_`yr'' in `row'
+}
+local row = `row' + 1
+
+replace Variable = "=== STUDENT ===" in `row'
+local row = `row' + 1
+
+replace Variable = "AROP rate (%)" in `row'
+foreach yr of local years {
+    replace Value_`yr' = `arop_ec4_`yr'' in `row'
+}
+local row = `row' + 1
+
+replace Variable = "Population" in `row'
+foreach yr of local years {
+    replace Value_`yr' = `n_ec4_`yr'' in `row'
+}
+local row = `row' + 1
+
+keep if Variable != ""
+
+foreach yr of local years {
+    format Value_`yr' %15.2f
+}
+
+export excel "$output/arop_by_economic_status_SILC.xlsx", replace sheet("By_EconStatus") firstrow(variables)
+di "Analysis 1 saved: arop_by_economic_status_SILC.xlsx"
+
+***************************************
+* ANALYSIS 2: BY GENDER
+***************************************
+
+di _n "=== Analysis 2: AROP by Gender ===" _n
+
+use "$output/arop_by_groups_microdata_SILC.dta", clear
+
+foreach yr of local years {
+    quietly count if year == `yr'
+    if r(N) == 0 continue
+    
+    forvalues g = 1/2 {
+        quietly count if year == `yr' & gender == `g'
+        if r(N) > 0 {
+            sum arop [aw=dwt] if year == `yr' & gender == `g'
+            local arop_g`g'_`yr' = r(mean) * 100
+            
+            sum dwt if year == `yr' & gender == `g'
+            local n_g`g'_`yr' = r(sum)
+        }
+        else {
+            local arop_g`g'_`yr' = .
+            local n_g`g'_`yr' = .
+        }
+    }
+}
+
+* Create output 2
+clear
+set obs 6
+
+gen str50 Variable = ""
+foreach yr of local years {
+    gen Value_`yr' = .
+}
+
+local row = 1
+
+replace Variable = "=== MALE ===" in `row'
+local row = `row' + 1
+
+replace Variable = "AROP rate (%)" in `row'
+foreach yr of local years {
+    replace Value_`yr' = `arop_g1_`yr'' in `row'
+}
+local row = `row' + 1
+
+replace Variable = "Population" in `row'
+foreach yr of local years {
+    replace Value_`yr' = `n_g1_`yr'' in `row'
+}
+local row = `row' + 1
+
+replace Variable = "=== FEMALE ===" in `row'
+local row = `row' + 1
+
+replace Variable = "AROP rate (%)" in `row'
+foreach yr of local years {
+    replace Value_`yr' = `arop_g2_`yr'' in `row'
+}
+local row = `row' + 1
+
+replace Variable = "Population" in `row'
+foreach yr of local years {
+    replace Value_`yr' = `n_g2_`yr'' in `row'
+}
+local row = `row' + 1
+
+keep if Variable != ""
+
+foreach yr of local years {
+    format Value_`yr' %15.2f
+}
+
+export excel "$output/arop_by_gender_SILC.xlsx", replace sheet("By_Gender") firstrow(variables)
+di "Analysis 2 saved: arop_by_gender_SILC.xlsx"
+
+***************************************
+* ANALYSIS 3: BY ECONOMIC STATUS AND GENDER
+***************************************
+
+di _n "=== Analysis 3: AROP by Economic Status and Gender ===" _n
+
+use "$output/arop_by_groups_microdata_SILC.dta", clear
+
+foreach yr of local years {
+    quietly count if year == `yr'
+    if r(N) == 0 continue
+    
+    forvalues ec = 1/5 {
+        forvalues g = 1/2 {
+            quietly count if year == `yr' & econ_cat == `ec' & gender == `g'
+            if r(N) > 0 {
+                sum arop [aw=dwt] if year == `yr' & econ_cat == `ec' & gender == `g'
+                local arop_ec`ec'g`g'_`yr' = r(mean) * 100
+                
+                sum dwt if year == `yr' & econ_cat == `ec' & gender == `g'
+                local n_ec`ec'g`g'_`yr' = r(sum)
+            }
+            else {
+                local arop_ec`ec'g`g'_`yr' = .
+                local n_ec`ec'g`g'_`yr' = .
+            }
+        }
+    }
+}
+
+* Create output 3
+clear
+set obs 32
+
+gen str50 Variable = ""
+foreach yr of local years {
+    gen Value_`yr' = .
+}
+
+local row = 1
+
+forvalues ec = 1/5 {
+    
+    local ec_name "Working"
+    if `ec' == 2 local ec_name "Unemployed"
+    if `ec' == 3 local ec_name "Retired"
+    if `ec' == 4 local ec_name "Student"
+    if `ec' == 5 local ec_name "Other inactive"
+    
+    replace Variable = "=== `ec_name' ===" in `row'
+    local row = `row' + 1
+    
+    replace Variable = "Male - AROP rate (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `arop_ec`ec'g1_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Male - Population" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `n_ec`ec'g1_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Female - AROP rate (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `arop_ec`ec'g2_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Female - Population" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `n_ec`ec'g2_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "" in `row'
+    local row = `row' + 1
+}
+
+keep if Variable != ""
+
+foreach yr of local years {
+    format Value_`yr' %15.2f
+}
+
+export excel "$output/arop_by_economic_status_and_gender_SILC.xlsx", replace sheet("By_EconStatus_Gender") firstrow(variables)
+di "Analysis 3 saved: arop_by_economic_status_and_gender_SILC.xlsx"
+
+di _n "==============================================================================="
+di "ALL ANALYSES COMPLETE - EU-SILC"
+di "==============================================================================="
+di "Output files:"
+di "  1. arop_by_economic_status_SILC.xlsx"
+di "  2. arop_by_gender_SILC.xlsx"
+di "  3. arop_by_economic_status_and_gender_SILC.xlsx"
+di "==============================================================================="
