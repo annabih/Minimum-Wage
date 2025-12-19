@@ -1,7 +1,7 @@
 *******************************************************************************************************************************************************************************************
 *** Titel: Merge EU-SILC Cross-sectional data for Austria 2015-2023
 *** Date: 19.12.2024
-*** Aim: Create single dataset with all years (R, D, H, P files merged)
+*** Aim: Merge R, D, H, P files for each year and append all years
 *******************************************************************************************************************************************************************************************
 clear all
 set more off
@@ -11,189 +11,77 @@ global output "C:\Users\ALochbih\OneDrive - Bundesarbeitskammer\Desktop\EUROMOD\
 
 local years "2015 2016 2017 2018 2019 2020 2021 2022 2023"
 
-di _n "==============================================================================="
-di "MERGING EU-SILC CROSS-SECTIONAL DATA 2015-2023"
-di "===============================================================================" _n
-
-* Loop through each year
-local year_count = 0
+* Loop through each year and merge files
+local first_year = 1
 
 foreach yr of local years {
     
     di _n "=== Processing Year `yr' ===" _n
     
-    * Check if directory exists
-    capture confirm file "$input/`yr'/UDB_cAT`yr'R.csv"
-    if _rc != 0 {
-        di as error "WARNING: Directory or files for year `yr' not found"
-        di as error "Skipping year `yr'..."
-        continue
-    }
+    * Create short year (15, 16, 17, ...)
+    local yr_short = substr("`yr'", 3, 2)
     
-    *************************************
-    * MERGE H, R, D, P files for this year
-    *************************************
-    
-    * H-Datei importieren (Household-Level)
-    import delimited "$input/`yr'/UDB_cAT`yr'H.csv", delimiter(",") clear case(preserve)
+    * H-Datei (Household)
+    import delimited "$input/`yr'/UDB_cAT`yr_short'H.csv", delimiter(",") clear case(preserve)
     rename HB030 household_id
-    di "  H-file: " _N " households"
     tempfile household
     save `household'
     
-    * R-Datei importieren (Personal-Level)
-    import delimited "$input/`yr'/UDB_cAT`yr'R.csv", delimiter(",") clear case(preserve)
-    rename RB030 person_id
-    rename RX030 household_id
-    di "  R-file: " _N " persons"
-    tempfile register
-    save `register'
-    
-    * D-Datei importieren (Household-Level!)
-    import delimited "$input/`yr'/UDB_cAT`yr'D.csv", delimiter(",") clear case(preserve)
+    * D-Datei (Household)
+    import delimited "$input/`yr'/UDB_cAT`yr_short'D.csv", delimiter(",") clear case(preserve)
     rename DB030 household_id
-    di "  D-file: " _N " households"
     tempfile demographic_hh
     save `demographic_hh'
     
-    * P-Datei importieren (Personal-Level) - als Master
-    import delimited "$input/`yr'/UDB_cAT`yr'P.csv", delimiter(",") clear case(preserve)
+    * R-Datei (Personal)
+    import delimited "$input/`yr'/UDB_cAT`yr_short'R.csv", delimiter(",") clear case(preserve)
+    rename RB030 person_id
+    rename RX030 household_id
+    tempfile register
+    save `register'
+    
+    * P-Datei (Personal) - Master
+    import delimited "$input/`yr'/UDB_cAT`yr_short'P.csv", delimiter(",") clear case(preserve)
     rename PB030 person_id
     rename PX030 household_id
-    di "  P-file: " _N " persons"
     
-    * Merge Personal-Level Dateien nach person_id
+    * Merge personal files
     merge 1:1 person_id using `register'
-    tab _merge
     drop _merge
     
-    * Merge Household-Level Dateien nach household_id (m:1!)
+    * Merge household files
     merge m:1 household_id using `household'
-    tab _merge
     drop _merge
     
     merge m:1 household_id using `demographic_hh'
-    tab _merge
     drop _merge
     
-    * Add year variable
+    * Add year
     gen year = `yr'
-    label variable year "Survey year"
     
-    di "  Merged year `yr': " _N " observations"
-    
-    * Save this year's merged data
-    tempfile year_`yr'
-    save `year_`yr''
+    di "Year `yr' merged: " _N " observations"
     
     * Append to combined dataset
-    if `year_count' == 0 {
+    if `first_year' == 1 {
         tempfile alldata
-        save `alldata', replace
+        save `alldata'
+        local first_year = 0
     }
     else {
         append using `alldata'
         save `alldata', replace
     }
-    
-    local year_count = `year_count' + 1
 }
 
-di _n "==============================================================================="
-di "MERGING COMPLETE"
-di "==============================================================================="
-di "Years processed: `year_count'"
-di "Total observations: " _N
-di "===============================================================================" _n
+* WICHTIG: Load the combined data before saving!
+use `alldata', clear
 
-* Verify year distribution
-tab year, missing
-
-* Check key variables
-di _n "=== Key variables present ===" _n
-local key_vars "person_id household_id year HX090 RB050 PB040 RX010 PX010"
-foreach var of local key_vars {
-    capture confirm variable `var'
-    if _rc == 0 {
-        di "`var': ✓"
-    }
-    else {
-        di as error "`var': ✗ NOT FOUND"
-    }
-}
-
-***********************************************
-* DESTRING KEY VARIABLES
-***********************************************
-
-di _n "=== Destringing key numeric variables ===" _n
-
-local numeric_vars "year HX090 HY020 RB050 PB040 RX010 PX010"
-
-foreach var of local numeric_vars {
-    capture confirm variable `var'
-    if _rc == 0 {
-        capture confirm string variable `var'
-        if _rc == 0 {
-            di "Converting `var' from string to numeric..."
-            replace `var' = subinstr(`var', ",", ".", .)
-            destring `var', replace force
-            di "  -> `var' converted"
-        }
-        else {
-            di "`var' is already numeric"
-        }
-    }
-}
-
-***********************************************
-* BASIC CHECKS
-***********************************************
-
-di _n "=== Basic summary statistics ===" _n
-
-* Summary by year
-preserve
-collapse (count) n_obs=person_id, by(year)
-list year n_obs, clean noobs
-restore
-
-***********************************************
-* SAVE COMBINED DATASET
-***********************************************
-
-di _n "=== Saving combined dataset ===" _n
-
-capture mkdir "$output"
-
-* Save as Stata format
+* Save final combined dataset
 save "$output/SILC_CrossSec_AllYears_2015_2023.dta", replace
-di "Saved as: SILC_CrossSec_AllYears_2015_2023.dta"
-
-* Export summary
-preserve
-
-collapse (count) n_obs=person_id (mean) mean_HX090=HX090, by(year)
-
-format mean_HX090 %12.2f
-
-export excel "$output/SILC_CrossSec_Summary.xlsx", replace sheet("Summary") firstrow(variables)
-di "Saved summary: SILC_CrossSec_Summary.xlsx"
-
-restore
-
-***********************************************
-* FINAL SUMMARY
-***********************************************
 
 di _n "==============================================================================="
-di "DATASET CREATION COMPLETE"
+di "COMPLETE!"
 di "==============================================================================="
-di "Output file: SILC_CrossSec_AllYears_2015_2023.dta"
-di "Location: $output"
-di ""
-di "Years included:"
-tab year
-di ""
 di "Total observations: " _N
+tab year
 di "==============================================================================="
