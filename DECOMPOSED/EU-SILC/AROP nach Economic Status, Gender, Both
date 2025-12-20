@@ -7,8 +7,8 @@
 clear all
 set more off
 
-use "C:\Users\ALochbih\OneDrive - Bundesarbeitskammer\Desktop\EUROMOD\InWorkPoverty\Robustness\SILC_CrossSec_AllYears_2015_2023.dta"
-global output "C:\Users\ALochbih\OneDrive - Bundesarbeitskammer\Desktop\EUROMOD\InWorkPoverty\Ergebnisse\Decomposed"
+use "E:\EUROMOD\InWorkPoverty\Robustness\SILC_CrossSec_AllYears_2015_2023.dta"
+global output "E:\EUROMOD\InWorkPoverty\Ergebnisse\Decomposed"
 
 local years "2015 2016 2017 2018 2019 2020 2021 2022 2023"
 
@@ -90,9 +90,7 @@ if _rc == 0 {
 }
 
 * Label all economic status categories (1-9)
-label define econ_lbl 1 "Working full-time" 2 "Working part-time" 3 "Unemployed" ///
-                      4 "Student" 5 "Retired" 6 "Permanently disabled" ///
-                      7 "Military/community service" 8 "Domestic tasks" 9 "Other inactive"
+label define econ_lbl 1 "Working full-time" 2 "Working part-time" 3 "Unemployed" 4 "Student" 5 "Retired" 6 "Permanently disabled" 7 "Military/community service" 8 "Domestic tasks" 9 "Other inactive"
 label values econ_status econ_lbl
 label variable econ_status "Economic status (detailed)"
 
