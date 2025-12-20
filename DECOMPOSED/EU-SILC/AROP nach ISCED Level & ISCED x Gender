@@ -99,11 +99,7 @@ if _rc == 0 {
     
     * Note: SILC PE040 uses simplified ISCED categories (0,1,2,3,5), not full 0-8 scale
     
-    label define isced_lbl 0 "Less than primary (ISCED 0)" ///
-                           1 "Primary (ISCED 1)" ///
-                           2 "Lower secondary (ISCED 2)" ///
-                           3 "Upper secondary (ISCED 3-4)" ///
-                           5 "Tertiary (ISCED 5-8)"
+    label define isced_lbl 0 "Less than primary (ISCED 0)" 1 "Primary (ISCED 1)" 2 "Lower secondary (ISCED 2)" 3 "Upper secondary (ISCED 3-4)" 5 "Tertiary (ISCED 5-8)"
     label values isced isced_lbl
     label variable isced "Highest ISCED level attained (PE040)"
 }
