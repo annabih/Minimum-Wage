@@ -2,7 +2,7 @@
 *** Titel: AROP Analysis by ISCED Level and Gender - EU-SILC Austria 2015-2023
 *** Date: 19.12.2024
 *** Aim: Overall poverty rate by ISCED level, gender, and combination
-*** Note: PE040 (highest ISCED level attained)
+*** Note: PE040 (2015-2020) and PE041 (2021-2023) - highest ISCED level attained
 *******************************************************************************************************************************************************************************************
 clear all
 set more off
@@ -20,7 +20,7 @@ di _n "=== Original observations: " _N " ===" _n
 
 di _n "=== Destringing variables ===" _n
 
-local numeric_vars "HX090 RB050 PB040 RX010 PX010 PE040 RB090 year"
+local numeric_vars "HX090 RB050 PB040 RX010 PX010 PE040 PE041 RB090 year"
 
 foreach var of local numeric_vars {
     capture confirm variable `var'
@@ -80,36 +80,66 @@ else {
     gen gender = .
 }
 
-* ISCED Level (PE040 - Highest ISCED level attained)
+* ISCED Level - Use PE040 for 2015-2020, PE041 for 2021-2023
+gen isced_raw = .
+
 capture confirm variable PE040
 if _rc == 0 {
-    gen isced = PE040
-    di "PE040 variable found and mapped to isced"
-    
-    * Check unique values in PE040
-    di _n "=== Unique values in PE040 ===" _n
-    tab PE040, missing
-    
-    * ISCED 2011 categories in SILC:
-    * 0 = Less than primary education (ISCED 0)
-    * 1 = Primary education (ISCED 1)
-    * 2 = Lower secondary education (ISCED 2)
-    * 3 = Upper secondary education (ISCED 3-4)
-    * 5 = Tertiary education (ISCED 5-8)
-    
-    * Note: SILC PE040 uses simplified ISCED categories (0,1,2,3,5), not full 0-8 scale
-    
-    label define isced_lbl 0 "Less than primary (ISCED 0)" 1 "Primary (ISCED 1)" 2 "Lower secondary (ISCED 2)" 3 "Upper secondary (ISCED 3-4)" 5 "Tertiary (ISCED 5-8)"
-    label values isced isced_lbl
-    label variable isced "Highest ISCED level attained (PE040)"
+    replace isced_raw = PE040 if year <= 2020 & !missing(PE040)
+    di "Using PE040 for years 2015-2020"
 }
 else {
-    di as error "ERROR: ISCED variable PE040 not found!"
+    di as error "WARNING: PE040 variable not found!"
+}
+
+capture confirm variable PE041
+if _rc == 0 {
+    replace isced_raw = PE041 if year >= 2021 & !missing(PE041)
+    di "Using PE041 for years 2021-2023"
+}
+else {
+    di as error "WARNING: PE041 variable not found!"
+}
+
+* Check if we have any ISCED data
+count if !missing(isced_raw)
+if r(N) == 0 {
+    di as error "ERROR: No ISCED data found in PE040 or PE041!"
     error 111
 }
 
+* Check unique values in raw ISCED
+di _n "=== Unique values in raw ISCED (PE040/PE041) ===" _n
+tab isced_raw, missing
+
+* Recode ISCED to 5 main categories (1-5)
+* Based on first digit of 3-digit codes
+gen isced = .
+
+* ISCED 1 = Primary education (codes 0, 100)
+replace isced = 1 if inlist(isced_raw, 0, 100)
+
+* ISCED 2 = Lower secondary education (code 200, all starting with 2)
+replace isced = 2 if isced_raw >= 200 & isced_raw < 300
+
+* ISCED 3 = Upper secondary education (all codes starting with 3)
+* Includes: 300, 340, 342, 343, 344, 349, 350, 352, 353, 354, 359, 390, 392, 393, 394, 399
+replace isced = 3 if isced_raw >= 300 & isced_raw < 400
+
+* ISCED 4 = Post-secondary non-tertiary education (all codes starting with 4)
+* Includes: 400, 440, 450, 490
+replace isced = 4 if isced_raw >= 400 & isced_raw < 500
+
+* ISCED 5 = Tertiary education (500, 550, 600, 700, 800)
+* All codes starting with 5, 6, 7, 8
+replace isced = 5 if inlist(isced_raw, 500, 550, 600, 700, 800)
+
+label define isced_lbl 1 "Primary (ISCED 0-1)" 2 "Lower secondary (ISCED 2)" 3 "Upper secondary (ISCED 3)" 4 "Post-secondary non-tertiary (ISCED 4)" 5 "Tertiary (ISCED 5-8)"
+label values isced isced_lbl
+label variable isced "Highest ISCED level attained (5 categories)"
+
 * Check distribution by year
-di _n "=== ISCED level distribution by year ===" _n
+di _n "=== ISCED level distribution by year (5 categories) ===" _n
 tab year isced [aw=dwt], missing row
 
 * Equivalised disposable income
@@ -164,15 +194,6 @@ save "$output/arop_by_isced_microdata_SILC.dta", replace
 
 di _n "=== Analysis 1: AROP by ISCED Level ===" _n
 
-* Determine which ISCED levels actually exist in the data
-quietly tab isced
-local isced_levels = r(r)
-di "Number of ISCED levels found: `isced_levels'"
-
-* Get list of actual values
-quietly levelsof isced, local(isced_vals)
-di "ISCED values present: `isced_vals'"
-
 foreach yr of local years {
     quietly count if year == `yr'
     if r(N) == 0 {
@@ -196,7 +217,7 @@ foreach yr of local years {
     sum arop [aw=dwt] if year == `yr'
     local arop_rate_`yr' = r(mean) * 100
     
-    foreach isc of local isced_vals {
+    forvalues isc = 1/5 {
         quietly count if year == `yr' & isced == `isc'
         if r(N) > 0 {
             * Population by ISCED
@@ -260,14 +281,24 @@ local row = `row' + 1
 replace Variable = "" in `row'
 local row = `row' + 1
 
-* By ISCED level (using actual values present)
-foreach isc of local isced_vals {
+* By ISCED level (1-5)
+forvalues isc = 1/5 {
     
-    local isc_name "Less than primary (ISCED 0)"
-    if `isc' == 1 local isc_name "Primary (ISCED 1)"
-    if `isc' == 2 local isc_name "Lower secondary (ISCED 2)"
-    if `isc' == 3 local isc_name "Upper secondary (ISCED 3-4)"
-    if `isc' == 5 local isc_name "Tertiary (ISCED 5-8)"
+    if `isc' == 1 {
+        local isc_name "Primary (ISCED 0-1)"
+    }
+    else if `isc' == 2 {
+        local isc_name "Lower secondary (ISCED 2)"
+    }
+    else if `isc' == 3 {
+        local isc_name "Upper secondary (ISCED 3)"
+    }
+    else if `isc' == 4 {
+        local isc_name "Post-secondary non-tertiary (ISCED 4)"
+    }
+    else if `isc' == 5 {
+        local isc_name "Tertiary (ISCED 5-8)"
+    }
     
     replace Variable = "=== `isc_name' ===" in `row'
     local row = `row' + 1
@@ -311,9 +342,6 @@ di _n "=== Analysis 2: AROP by ISCED Level and Gender ===" _n
 
 use "$output/arop_by_isced_microdata_SILC.dta", clear
 
-* Get list of actual ISCED values again
-quietly levelsof isced, local(isced_vals)
-
 foreach yr of local years {
     quietly count if year == `yr'
     if r(N) == 0 continue
@@ -334,7 +362,7 @@ foreach yr of local years {
     sum arop [aw=dwt] if year == `yr'
     local arop_rate_`yr' = r(mean) * 100
     
-    foreach isc of local isced_vals {
+    forvalues isc = 1/5 {
         * Total for this ISCED level (both genders combined)
         quietly count if year == `yr' & isced == `isc'
         if r(N) > 0 {
@@ -387,7 +415,7 @@ foreach yr of local years {
 
 * Create output 2
 clear
-set obs 60
+set obs 70
 
 gen str50 Variable = ""
 foreach yr of local years {
@@ -422,13 +450,23 @@ replace Variable = "" in `row'
 local row = `row' + 1
 
 * By ISCED level and gender
-foreach isc of local isced_vals {
+forvalues isc = 1/5 {
     
-    local isc_name "Less than primary (ISCED 0)"
-    if `isc' == 1 local isc_name "Primary (ISCED 1)"
-    if `isc' == 2 local isc_name "Lower secondary (ISCED 2)"
-    if `isc' == 3 local isc_name "Upper secondary (ISCED 3-4)"
-    if `isc' == 5 local isc_name "Tertiary (ISCED 5-8)"
+    if `isc' == 1 {
+        local isc_name "Primary (ISCED 0-1)"
+    }
+    else if `isc' == 2 {
+        local isc_name "Lower secondary (ISCED 2)"
+    }
+    else if `isc' == 3 {
+        local isc_name "Upper secondary (ISCED 3)"
+    }
+    else if `isc' == 4 {
+        local isc_name "Post-secondary non-tertiary (ISCED 4)"
+    }
+    else if `isc' == 5 {
+        local isc_name "Tertiary (ISCED 5-8)"
+    }
     
     replace Variable = "=== `isc_name' ===" in `row'
     local row = `row' + 1
@@ -505,4 +543,17 @@ di "Analysis 2 saved: AROP_ISCED_GENDER_SILC.xlsx"
 
 di _n "==============================================================================="
 di "ALL ANALYSES COMPLETE - EU-SILC"
+di "==============================================================================="
+di "Output files:"
+di "  1. AROP_ISCED_SILC.xlsx"
+di "  2. AROP_ISCED_GENDER_SILC.xlsx"
+di ""
+di "Note: ISCED levels from PE040 (2015-2020) and PE041 (2021-2023)"
+di "      5 categories based on first digit of code:"
+di "      1 = Primary (codes 0, 100)"
+di "      2 = Lower secondary (codes 200-299)"
+di "      3 = Upper secondary (codes 300-399)"
+di "      4 = Post-secondary non-tertiary (codes 400-499)"
+di "      5 = Tertiary (codes 500, 550, 600, 700, 800)"
+di "      Gender: 1=Male, 2=Female"
 di "==============================================================================="
