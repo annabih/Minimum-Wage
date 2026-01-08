@@ -1,0 +1,72 @@
+*******************************************************************************************************************************************************************************************
+*** Titel: Append all EUROMOD pre-processed input files (2015-2023)
+*** Date: 19.12.2024
+*** Aim: Create single dataset with all years
+*******************************************************************************************************************************************************************************************
+clear all
+set more off
+
+*************************************************
+*** Create one full dataset
+*************************************************
+global input "C:\Users\ALochbih\OneDrive - Bundesarbeitskammer\Desktop\EUROMOD\InWorkPoverty\Data\Org_Input"
+global output "C:\Users\ALochbih\OneDrive - Bundesarbeitskammer\Desktop\EUROMOD\InWorkPoverty\Robustness"
+
+* Import first file
+import delimited "$input/AT_2015_a3_2015_03_n2.txt", clear stringcols(_all)
+gen year = 2015
+tempfile alldata
+save `alldata', replace
+
+* Append 2016
+import delimited "$input/AT_2016_a3.txt", clear stringcols(_all)
+gen year = 2016
+append using `alldata'
+save `alldata', replace
+
+* Append 2017
+import delimited "$input/AT_2017_a3.txt", clear stringcols(_all)
+gen year = 2017
+append using `alldata'
+save `alldata', replace
+
+* Append 2018
+import delimited "$input/AT_2018_a1.txt", clear stringcols(_all)
+gen year = 2018
+append using `alldata'
+save `alldata', replace
+
+* Append 2019
+import delimited "$input/AT_2019_b2_2015_03_n2.txt", clear stringcols(_all)
+gen year = 2019
+append using `alldata'
+save `alldata', replace
+
+* Append 2020
+import delimited "$input/AT_2020_b2_2015_03_n2.txt", clear stringcols(_all)
+gen year = 2020
+append using `alldata'
+save `alldata', replace
+
+* Append 2021
+import delimited "$input/AT_2021_b1_2015_03_n2.txt", clear stringcols(_all)
+gen year = 2021
+append using `alldata'
+save `alldata', replace
+
+* Append 2022
+import delimited "$input/AT_2022_b1_2015_03_n2.txt", clear stringcols(_all)
+gen year = 2022
+append using `alldata'
+save `alldata', replace
+
+* Append 2023
+import delimited "$input/AT_2023_b1_2015_03_n2.txt", clear stringcols(_all)
+gen year = 2023
+append using `alldata'
+
+* Save combined dataset
+save "$output/EUROMOD_AllYears_2015_2023.dta", replace
+
+di "Complete! Total observations: " _N
+tab year
