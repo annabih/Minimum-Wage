@@ -19,7 +19,7 @@ set more off
 use "D:\Data\AT_CROSS\SILC_CrossSec_AllYears_2015_2024.dta"
 global output "D:\InWorkPoverty_SILC"
 
-local years "2015 2016 2017 2018 2019 2020 2021 2022 2023"
+local years "2015 2016 2017 2018 2019 2020 2021 2022 2023 2024"
 
 di _n "=== Original observations: " _N " ===" _n
 
@@ -270,16 +270,16 @@ replace hh_type = 3 if n_adults == 1 & n_children == 2
 replace hh_type = 4 if n_adults == 1 & n_children >= 3
 
 * Gender-specific single adult households - females (gender=1)
-replace hh_type = 11 if n_adults == 1 & n_children == 0 & hh_adult_gender == 1  // female, 0 children
-replace hh_type = 12 if n_adults == 1 & n_children == 1 & hh_adult_gender == 1  // female, 1 child
-replace hh_type = 13 if n_adults == 1 & n_children == 2 & hh_adult_gender == 1  // female, 2 children
-replace hh_type = 14 if n_adults == 1 & n_children >= 3 & hh_adult_gender == 1  // female, 3+ children
+replace hh_type = 11 if n_adults == 1 & n_children == 0 & hh_adult_gender == 1
+replace hh_type = 12 if n_adults == 1 & n_children == 1 & hh_adult_gender == 1 
+replace hh_type = 13 if n_adults == 1 & n_children == 2 & hh_adult_gender == 1
+replace hh_type = 14 if n_adults == 1 & n_children >= 3 & hh_adult_gender == 1 
 
 * Gender-specific single adult households - males (gender=2)
-replace hh_type = 21 if n_adults == 1 & n_children == 0 & hh_adult_gender == 2  // male, 0 children
-replace hh_type = 22 if n_adults == 1 & n_children == 1 & hh_adult_gender == 2  // male, 1 child
-replace hh_type = 23 if n_adults == 1 & n_children == 2 & hh_adult_gender == 2  // male, 2 children
-replace hh_type = 24 if n_adults == 1 & n_children >= 3 & hh_adult_gender == 2  // male, 3+ children
+replace hh_type = 21 if n_adults == 1 & n_children == 0 & hh_adult_gender == 2  
+replace hh_type = 22 if n_adults == 1 & n_children == 1 & hh_adult_gender == 2 
+replace hh_type = 23 if n_adults == 1 & n_children == 2 & hh_adult_gender == 2 
+replace hh_type = 24 if n_adults == 1 & n_children >= 3 & hh_adult_gender == 2 
 
 * Two adults (no gender breakdown)
 replace hh_type = 5 if n_adults == 2 & n_children == 0
@@ -288,22 +288,7 @@ replace hh_type = 6 if n_adults == 2 & n_children == 2
 * Other household types
 replace hh_type = 99 if missing(hh_type)
 
-label define hh_type_lbl ///
-    1 "1 adult, 0 children (factor 1.0)" ///
-    2 "1 adult, 1 child (factor 1.3)" ///
-    3 "1 adult, 2 children (factor 1.6)" ///
-    4 "1 adult, 3+ children (factor 1.9+)" ///
-    11 "1 female, 0 children (factor 1.0)" ///
-    12 "1 female, 1 child (factor 1.3)" ///
-    13 "1 female, 2 children (factor 1.6)" ///
-    14 "1 female, 3+ children (factor 1.9+)" ///
-    21 "1 male, 0 children (factor 1.0)" ///
-    22 "1 male, 1 child (factor 1.3)" ///
-    23 "1 male, 2 children (factor 1.6)" ///
-    24 "1 male, 3+ children (factor 1.9+)" ///
-    5 "2 adults, 0 children (factor 1.5)" ///
-    6 "2 adults, 2 children (factor 2.1)" ///
-    99 "Other (OECD scale)"
+label define hh_type_lbl 1 "1 adult, 0 children (factor 1.0)" 2 "1 adult, 1 child (factor 1.3)" 3 "1 adult, 2 children (factor 1.6)" 4 "1 adult, 3+ children (factor 1.9+)" 11 "1 female, 0 children (factor 1.0)" 12 "1 female, 1 child (factor 1.3)" 13 "1 female, 2 children (factor 1.6)" 14 "1 female, 3+ children (factor 1.9+)" 21 "1 male, 0 children (factor 1.0)" 22 "1 male, 1 child (factor 1.3)" 23 "1 male, 2 children (factor 1.6)" 24 "1 male, 3+ children (factor 1.9+)" 5 "2 adults, 0 children (factor 1.5)" 6 "2 adults, 2 children (factor 2.1)" 99 "Other (OECD scale)"
 label values hh_type hh_type_lbl
 label variable hh_type "Household type (gender-specific for singles)"
 
