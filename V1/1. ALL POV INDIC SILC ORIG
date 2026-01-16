@@ -284,35 +284,16 @@ replace hh_type = 99 if missing(hh_type)
 
 * Create auxiliary variable for overall single-adult households (combining male+female)
 gen byte hh_type_overall = .
-replace hh_type_overall = 1 if inlist(hh_type, 11, 21)  // 1 adult, 0 children
-replace hh_type_overall = 2 if inlist(hh_type, 12, 22)  // 1 adult, 1 child
-replace hh_type_overall = 3 if inlist(hh_type, 13, 23)  // 1 adult, 2 children
-replace hh_type_overall = 4 if inlist(hh_type, 14, 24)  // 1 adult, 3+ children
-replace hh_type_overall = hh_type if inlist(hh_type, 5, 6, 99)  // keep 2-adult and other as-is
-
-label define hh_type_lbl ///
-    11 "1 female, 0 children (factor 1.0)" ///
-    12 "1 female, 1 child (factor 1.3)" ///
-    13 "1 female, 2 children (factor 1.6)" ///
-    14 "1 female, 3+ children (factor 1.9+)" ///
-    21 "1 male, 0 children (factor 1.0)" ///
-    22 "1 male, 1 child (factor 1.3)" ///
-    23 "1 male, 2 children (factor 1.6)" ///
-    24 "1 male, 3+ children (factor 1.9+)" ///
-    5 "2 adults, 0 children (factor 1.5)" ///
-    6 "2 adults, 2 children (factor 2.1)" ///
-    99 "Other (OECD scale)"
+replace hh_type_overall = 1 if inlist(hh_type, 11, 21) 
+replace hh_type_overall = 2 if inlist(hh_type, 12, 22)
+replace hh_type_overall = 3 if inlist(hh_type, 13, 23)  
+replace hh_type_overall = 4 if inlist(hh_type, 14, 24) 
+replace hh_type_overall = hh_type if inlist(hh_type, 5, 6, 99) 
+label define hh_type_lbl 11 "1 female, 0 children (factor 1.0)" 12 "1 female, 1 child (factor 1.3)" 13 "1 female, 2 children (factor 1.6)" 14 "1 female, 3+ children (factor 1.9+)" 21 "1 male, 0 children (factor 1.0)" 22 "1 male, 1 child (factor 1.3)" 23 "1 male, 2 children (factor 1.6)" 24 "1 male, 3+ children (factor 1.9+)" 5 "2 adults, 0 children (factor 1.5)" 6 "2 adults, 2 children (factor 2.1)" 99 "Other (OECD scale)"
 label values hh_type hh_type_lbl
 label variable hh_type "Household type (gender-specific for singles)"
 
-label define hh_type_overall_lbl ///
-    1 "1 adult, 0 children (factor 1.0)" ///
-    2 "1 adult, 1 child (factor 1.3)" ///
-    3 "1 adult, 2 children (factor 1.6)" ///
-    4 "1 adult, 3+ children (factor 1.9+)" ///
-    5 "2 adults, 0 children (factor 1.5)" ///
-    6 "2 adults, 2 children (factor 2.1)" ///
-    99 "Other (OECD scale)"
+label define hh_type_overall_lbl 1 "1 adult, 0 children (factor 1.0)" 2 "1 adult, 1 child (factor 1.3)" 3 "1 adult, 2 children (factor 1.6)" 4 "1 adult, 3+ children (factor 1.9+)" 5 "2 adults, 0 children (factor 1.5)" 6 "2 adults, 2 children (factor 2.1)" 99 "Other (OECD scale)"
 label values hh_type_overall hh_type_overall_lbl
 label variable hh_type_overall "Household type (overall, gender combined)"
 
