@@ -24,36 +24,37 @@ foreach yr of local years {
 
     * H-Datei (Household)
     import delimited "$input/`yr'/UDB_cAT`yr_short'H.csv", delimiter(",") clear case(preserve)
-    rename HB030 PX030  // use PX030 as standard household ID
+    rename HB030 id_hh
     tempfile household
     save `household'
 
     * D-Datei (Household)
     import delimited "$input/`yr'/UDB_cAT`yr_short'D.csv", delimiter(",") clear case(preserve)
-    rename DB030 PX030  // use PX030 as standard household ID
+    rename DB030 id_hh
     tempfile demographic_hh
     save `demographic_hh'
 
     * R-Datei (Personal)
     import delimited "$input/`yr'/UDB_cAT`yr_short'R.csv", delimiter(",") clear case(preserve)
-    rename RB030 PB030  // use PB030 as standard person ID
-    rename RX030 PX030  // use PX030 as standard household ID
+    rename RB030 person_id
+    rename RX030 id_hh
     tempfile register
     save `register'
 
     * P-Datei (Personal) - Master (already has PB030 and PX030)
     import delimited "$input/`yr'/UDB_cAT`yr_short'P.csv", delimiter(",") clear case(preserve)
-
-    * Merge personal files (P + R) on PB030
-    merge 1:1 PB030 using `register'
+    rename PB030 person_id
+    rename PX030 id_hh
+    
+    * Merge personal files
+    merge 1:1 person_id using `register'
     drop _merge
-
-    * Merge household H-file on PX030
-    merge m:1 PX030 using `household'
+    
+    * Merge household files
+    merge m:1 id_hh using `household'
     drop _merge
-
-    * Merge household D-file on PX030
-    merge m:1 PX030 using `demographic_hh'
+    
+    merge m:1 id_hh using `demographic_hh'
     drop _merge
 
     * Add year

@@ -15,8 +15,8 @@
 clear all
 set more off
 
-use "C:\Users\ALochbih\OneDrive - Bundesarbeitskammer\Desktop\EUROMOD\InWorkPoverty\Robustness\SILC_CrossSec_AllYears_2015_2023.dta"
-global output "C:\Users\ALochbih\OneDrive - Bundesarbeitskammer\Desktop\EUROMOD\InWorkPoverty\Ergebnisse"
+use "D:\Data\AT_CROSS\SILC_CrossSec_AllYears_2015_2024.dta"
+global output "D:\InWorkPoverty_SILC"
 
 local years "2015 2016 2017 2018 2019 2020 2021 2022 2023"
 
@@ -237,11 +237,7 @@ replace hh_type = 3 if n_adults == 2 & n_children == 0
 replace hh_type = 4 if n_adults == 2 & n_children == 2
 replace hh_type = 99 if missing(hh_type)
 
-label define hh_type_lbl 1 "1 adult, 0 children (factor 1.0)" ///
-                         2 "1 adult, 1 child (factor 1.3)" ///
-                         3 "2 adults, 0 children (factor 1.5)" ///
-                         4 "2 adults, 2 children (factor 2.1)" ///
-                         99 "Other (OECD scale)"
+label define hh_type_lbl 1 "1 adult, 0 children (factor 1.0)" 2 "1 adult, 1 child (factor 1.3)" 3 "2 adults, 0 children (factor 1.5)" 4 "2 adults, 2 children (factor 2.1)" 99 "Other (OECD scale)"
 label values hh_type hh_type_lbl
 label variable hh_type "Household type"
 
