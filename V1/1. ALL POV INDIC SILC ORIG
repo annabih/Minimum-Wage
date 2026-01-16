@@ -306,34 +306,34 @@ save "$output//ALL_POV_IND_SILC_ORGIN.dta", replace
 di "Micro-level data saved with both AROP and IWP variables"
 
 ***************************************
-* Calculate statistics by year
+* Calculate statistics by year - OVERALL
 ***************************************
 
-di _n "=== Calculating statistics by year ===" _n
+di _n "=== Calculating OVERALL statistics by year ===" _n
 
 foreach yr of local years {
-    
+
     quietly count if year == `yr'
     if r(N) == 0 continue
-    
+
     * OVERALL POVERTY (AROP)
     sum arop [aw=dwt] if year == `yr'
     local arop_rate_`yr' = r(mean) * 100
-    
+
     sum dwt if year == `yr'
     local n_total_`yr' = r(sum)
-    
+
     gen temp_arop_`yr' = arop * dwt if year == `yr'
     sum temp_arop_`yr'
     local n_arop_`yr' = r(sum)
     drop temp_arop_`yr'
-    
+
     quietly count if year == `yr' & arop == 1
     if r(N) > 0 {
         sum arop_gap_abs [aw=dwt] if year == `yr' & arop == 1
         local arop_gap_abs_`yr' = r(mean)
         local arop_gap_abs_month_`yr' = r(mean) / 12
-        
+
         sum arop_gap_rel [aw=dwt] if year == `yr' & arop == 1
         local arop_gap_rel_`yr' = r(mean)
     }
@@ -342,27 +342,27 @@ foreach yr of local years {
         local arop_gap_abs_month_`yr' = .
         local arop_gap_rel_`yr' = .
     }
-    
+
     * IN-WORK POVERTY (IWP)
     quietly count if year == `yr' & worker == 1
     if r(N) > 0 {
         sum inwork_poor [aw=dwt] if year == `yr' & worker == 1
         local iwp_rate_`yr' = r(mean) * 100
-        
+
         sum dwt if year == `yr' & worker == 1
         local n_workers_`yr' = r(sum)
-        
+
         gen temp_iwp_`yr' = inwork_poor * dwt if year == `yr' & worker == 1
         sum temp_iwp_`yr'
         local n_iwp_`yr' = r(sum)
         drop temp_iwp_`yr'
-        
+
         quietly count if year == `yr' & inwork_poor == 1
         if r(N) > 0 {
             sum iwp_gap_abs [aw=dwt] if year == `yr' & inwork_poor == 1
             local iwp_gap_abs_`yr' = r(mean)
             local iwp_gap_abs_month_`yr' = r(mean) / 12
-            
+
             sum iwp_gap_rel [aw=dwt] if year == `yr' & inwork_poor == 1
             local iwp_gap_rel_`yr' = r(mean)
         }
@@ -371,7 +371,7 @@ foreach yr of local years {
             local iwp_gap_abs_month_`yr' = .
             local iwp_gap_rel_`yr' = .
         }
-        
+
         sum months_worked [aw=dwt] if year == `yr' & worker == 1
         local months_`yr' = r(mean)
     }
@@ -384,28 +384,143 @@ foreach yr of local years {
         local iwp_gap_rel_`yr' = .
         local months_`yr' = .
     }
-    
+
     * SHARED VARIABLES
     sum pov_threshold_60 if year == `yr', meanonly
     local pov_line_`yr' = r(mean)
     local pov_line_month_`yr' = r(mean) / 12
-    
+
     sum median_eq_hh_ils_dispy if year == `yr', meanonly
     local median_inc_`yr' = r(mean)
     local median_inc_month_`yr' = r(mean) / 12
-    
+
     sum eq_hh_ils_dispy [aw=dwt] if year == `yr'
     local mean_inc_`yr' = r(mean)
     local mean_inc_month_`yr' = r(mean) / 12
-    
+
     di "Year `yr': AROP = " %5.2f `arop_rate_`yr'' "%, IWP = " %5.2f `iwp_rate_`yr'' "%"
 }
 
+***************************************
+* Calculate statistics by year - BY HOUSEHOLD TYPE
+***************************************
+
+di _n "=== Calculating statistics BY HOUSEHOLD TYPE ===" _n
+
+* Define household types
+local hh_types "1 2 3 4 99"
+local hh_labels `" "1A0C" "1A1C" "2A0C" "2A2C" "Other" "'
+
+local ht_idx = 1
+foreach ht of local hh_types {
+    local ht_label : word `ht_idx' of `hh_labels'
+    di _n "Household type `ht' (`ht_label'):"
+
+    foreach yr of local years {
+
+        quietly count if year == `yr' & hh_type == `ht'
+        if r(N) == 0 {
+            local arop_rate_`ht_label'_`yr' = .
+            local n_total_`ht_label'_`yr' = .
+            local n_arop_`ht_label'_`yr' = .
+            local arop_gap_abs_`ht_label'_`yr' = .
+            local arop_gap_abs_month_`ht_label'_`yr' = .
+            local arop_gap_rel_`ht_label'_`yr' = .
+            local iwp_rate_`ht_label'_`yr' = .
+            local n_workers_`ht_label'_`yr' = .
+            local n_iwp_`ht_label'_`yr' = .
+            local iwp_gap_abs_`ht_label'_`yr' = .
+            local iwp_gap_abs_month_`ht_label'_`yr' = .
+            local iwp_gap_rel_`ht_label'_`yr' = .
+            local months_`ht_label'_`yr' = .
+            local mean_inc_`ht_label'_`yr' = .
+            local mean_inc_month_`ht_label'_`yr' = .
+            continue
+        }
+
+        * OVERALL POVERTY (AROP) for this household type
+        sum arop [aw=dwt] if year == `yr' & hh_type == `ht'
+        local arop_rate_`ht_label'_`yr' = r(mean) * 100
+
+        sum dwt if year == `yr' & hh_type == `ht'
+        local n_total_`ht_label'_`yr' = r(sum)
+
+        gen temp_arop_`ht'_`yr' = arop * dwt if year == `yr' & hh_type == `ht'
+        sum temp_arop_`ht'_`yr'
+        local n_arop_`ht_label'_`yr' = r(sum)
+        drop temp_arop_`ht'_`yr'
+
+        quietly count if year == `yr' & hh_type == `ht' & arop == 1
+        if r(N) > 0 {
+            sum arop_gap_abs [aw=dwt] if year == `yr' & hh_type == `ht' & arop == 1
+            local arop_gap_abs_`ht_label'_`yr' = r(mean)
+            local arop_gap_abs_month_`ht_label'_`yr' = r(mean) / 12
+
+            sum arop_gap_rel [aw=dwt] if year == `yr' & hh_type == `ht' & arop == 1
+            local arop_gap_rel_`ht_label'_`yr' = r(mean)
+        }
+        else {
+            local arop_gap_abs_`ht_label'_`yr' = .
+            local arop_gap_abs_month_`ht_label'_`yr' = .
+            local arop_gap_rel_`ht_label'_`yr' = .
+        }
+
+        * IN-WORK POVERTY (IWP) for this household type
+        quietly count if year == `yr' & hh_type == `ht' & worker == 1
+        if r(N) > 0 {
+            sum inwork_poor [aw=dwt] if year == `yr' & hh_type == `ht' & worker == 1
+            local iwp_rate_`ht_label'_`yr' = r(mean) * 100
+
+            sum dwt if year == `yr' & hh_type == `ht' & worker == 1
+            local n_workers_`ht_label'_`yr' = r(sum)
+
+            gen temp_iwp_`ht'_`yr' = inwork_poor * dwt if year == `yr' & hh_type == `ht' & worker == 1
+            sum temp_iwp_`ht'_`yr'
+            local n_iwp_`ht_label'_`yr' = r(sum)
+            drop temp_iwp_`ht'_`yr'
+
+            quietly count if year == `yr' & hh_type == `ht' & inwork_poor == 1
+            if r(N) > 0 {
+                sum iwp_gap_abs [aw=dwt] if year == `yr' & hh_type == `ht' & inwork_poor == 1
+                local iwp_gap_abs_`ht_label'_`yr' = r(mean)
+                local iwp_gap_abs_month_`ht_label'_`yr' = r(mean) / 12
+
+                sum iwp_gap_rel [aw=dwt] if year == `yr' & hh_type == `ht' & inwork_poor == 1
+                local iwp_gap_rel_`ht_label'_`yr' = r(mean)
+            }
+            else {
+                local iwp_gap_abs_`ht_label'_`yr' = .
+                local iwp_gap_abs_month_`ht_label'_`yr' = .
+                local iwp_gap_rel_`ht_label'_`yr' = .
+            }
+
+            sum months_worked [aw=dwt] if year == `yr' & hh_type == `ht' & worker == 1
+            local months_`ht_label'_`yr' = r(mean)
+        }
+        else {
+            local iwp_rate_`ht_label'_`yr' = .
+            local n_workers_`ht_label'_`yr' = .
+            local n_iwp_`ht_label'_`yr' = .
+            local iwp_gap_abs_`ht_label'_`yr' = .
+            local iwp_gap_abs_month_`ht_label'_`yr' = .
+            local iwp_gap_rel_`ht_label'_`yr' = .
+            local months_`ht_label'_`yr' = .
+        }
+
+        * Mean income for this household type
+        sum eq_hh_ils_dispy [aw=dwt] if year == `yr' & hh_type == `ht'
+        local mean_inc_`ht_label'_`yr' = r(mean)
+        local mean_inc_month_`ht_label'_`yr' = r(mean) / 12
+    }
+
+    local ht_idx = `ht_idx' + 1
+}
+
 *===============================================================================
-* CREATE FORMATTED OUTPUT
+* CREATE FORMATTED OUTPUT - OVERALL
 *===============================================================================
 
-di _n "=== Creating Excel output ===" _n
+di _n "=== Creating Excel output - OVERALL ===" _n
 
 clear
 set obs 35
@@ -558,7 +673,164 @@ foreach yr of local years {
 
 capture mkdir "$output"
 
-export excel "$output/ALL_POV_IND_SILC_ORGIN.xlsx", replace sheet("Combined_Poverty") firstrow(variables)
+* Save OVERALL sheet
+export excel "$output/ALL_POV_IND_SILC_ORGIN.xlsx", replace sheet("Overall") firstrow(variables)
+
+*===============================================================================
+* CREATE FORMATTED OUTPUT - BY HOUSEHOLD TYPE
+*===============================================================================
+
+di _n "=== Creating Excel output BY HOUSEHOLD TYPE ===" _n
+
+* Define household types and labels
+local hh_types "1 2 3 4 99"
+local hh_labels `" "1A0C" "1A1C" "2A0C" "2A2C" "Other" "'
+local hh_names `" "1Adult_0Children" "1Adult_1Child" "2Adults_0Children" "2Adults_2Children" "Other_OECD" "'
+
+local ht_idx = 1
+foreach ht of local hh_types {
+    local ht_label : word `ht_idx' of `hh_labels'
+    local ht_name : word `ht_idx' of `hh_names'
+
+    di "Creating sheet for household type: `ht_label'"
+
+    clear
+    set obs 35
+
+    gen str50 Variable = ""
+    foreach yr of local years {
+        gen Value_`yr' = .
+    }
+
+    local row = 1
+
+    * HEADER
+    replace Variable = "=== HOUSEHOLD TYPE: `ht_label' ===" in `row'
+    local row = `row' + 1
+
+    replace Variable = "" in `row'
+    local row = `row' + 1
+
+    * OVERALL POVERTY SECTION
+    replace Variable = "=== OVERALL POVERTY (AROP) ===" in `row'
+    local row = `row' + 1
+
+    replace Variable = "AROP rate (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `arop_rate_`ht_label'_`yr'' in `row'
+    }
+    local row = `row' + 1
+
+    replace Variable = "Total population" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `n_total_`ht_label'_`yr'' in `row'
+    }
+    local row = `row' + 1
+
+    replace Variable = "Number poor" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `n_arop_`ht_label'_`yr'' in `row'
+    }
+    local row = `row' + 1
+
+    replace Variable = "Avg poverty gap (Euro, annual)" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `arop_gap_abs_`ht_label'_`yr'' in `row'
+    }
+    local row = `row' + 1
+
+    replace Variable = "Avg poverty gap (Euro, monthly)" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `arop_gap_abs_month_`ht_label'_`yr'' in `row'
+    }
+    local row = `row' + 1
+
+    replace Variable = "Avg poverty gap (Percent)" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `arop_gap_rel_`ht_label'_`yr'' in `row'
+    }
+    local row = `row' + 1
+
+    replace Variable = "" in `row'
+    local row = `row' + 1
+
+    * IN-WORK POVERTY SECTION
+    replace Variable = "=== IN-WORK POVERTY (IWP) ===" in `row'
+    local row = `row' + 1
+
+    replace Variable = "IWP rate (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `iwp_rate_`ht_label'_`yr'' in `row'
+    }
+    local row = `row' + 1
+
+    replace Variable = "Number workers" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `n_workers_`ht_label'_`yr'' in `row'
+    }
+    local row = `row' + 1
+
+    replace Variable = "Number IWP" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `n_iwp_`ht_label'_`yr'' in `row'
+    }
+    local row = `row' + 1
+
+    replace Variable = "Avg months worked" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `months_`ht_label'_`yr'' in `row'
+    }
+    local row = `row' + 1
+
+    replace Variable = "Avg IWP gap (Euro, annual)" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `iwp_gap_abs_`ht_label'_`yr'' in `row'
+    }
+    local row = `row' + 1
+
+    replace Variable = "Avg IWP gap (Euro, monthly)" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `iwp_gap_abs_month_`ht_label'_`yr'' in `row'
+    }
+    local row = `row' + 1
+
+    replace Variable = "Avg IWP gap (Percent)" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `iwp_gap_rel_`ht_label'_`yr'' in `row'
+    }
+    local row = `row' + 1
+
+    replace Variable = "" in `row'
+    local row = `row' + 1
+
+    * INCOME SECTION
+    replace Variable = "=== INCOME INDICATORS ===" in `row'
+    local row = `row' + 1
+
+    replace Variable = "Mean equiv. income (Euro, annual)" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `mean_inc_`ht_label'_`yr'' in `row'
+    }
+    local row = `row' + 1
+
+    replace Variable = "Mean equiv. income (Euro, monthly)" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `mean_inc_month_`ht_label'_`yr'' in `row'
+    }
+    local row = `row' + 1
+
+    keep if Variable != ""
+
+    * Format all numeric variables
+    foreach yr of local years {
+        format Value_`yr' %15.2f
+    }
+
+    * Append to Excel file with separate sheet for each household type
+    export excel "$output/ALL_POV_IND_SILC_ORGIN.xlsx", sheet("`ht_name'") sheetmodify firstrow(variables)
+
+    local ht_idx = `ht_idx' + 1
+}
 
 di as result "File saved successfully!"
 
@@ -575,7 +847,13 @@ di "Income source: HY020 (household disposable income)"
 di "==============================================================================="
 di "Output files:"
 di "  - ALL_POV_IND_SILC_ORGIN.dta (microdata with AROP + IWP)"
-di "  - ALL_POV_IND_SILC_ORGIN.xlsx (summary statistics)"
+di "  - ALL_POV_IND_SILC_ORGIN.xlsx with 6 sheets:"
+di "      * Overall - Overall statistics across all households"
+di "      * 1Adult_0Children - Single person households"
+di "      * 1Adult_1Child - Single parent with one child"
+di "      * 2Adults_0Children - Couple without children"
+di "      * 2Adults_2Children - Couple with two children"
+di "      * Other_OECD - Other household types (using OECD scale)"
 di "==============================================================================="
 
 list Variable Value_*, clean noobs
