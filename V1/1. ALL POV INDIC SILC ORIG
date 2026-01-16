@@ -1,7 +1,14 @@
 *******************************************************************************************************************************************************************************************
 *** Titel: Combined Poverty Analysis using merged EU-SILC Austria 2015-2023
-*** Date: 19.12.2024
-*** Aim: Overall poverty (AROP) and In-work poverty calculation using HX090
+*** Date: 16.01.2026 (Updated)
+*** Aim: Overall poverty (AROP) and In-work poverty calculation with household-type specific equivalence factors
+*** Method: Uses HY020 (household income) with custom equivalence factors by household composition
+*** Equivalence factors:
+***   - 1 adult, 0 children: 1.0
+***   - 1 adult, 1 child: 1.3
+***   - 2 adults, 0 children: 1.5
+***   - 2 adults, 2 children: 2.1
+***   - Other household types: OECD scale (1.0 + (n_adults-1)*0.5 + n_children*0.3)
 *** Note: Poverty threshold is recalculated for each year
 *******************************************************************************************************************************************************************************************
 clear all
@@ -20,7 +27,7 @@ di _n "=== Original observations: " _N " ===" _n
 
 di _n "=== Destringing variables ===" _n
 
-local numeric_vars "HX090 RB050 PB040 RX010 PX010 PL073 PL074 PL075 PL076 year"
+local numeric_vars "HX090 HY020 HX040 DB040 RB050 PB040 RX010 PX010 PL073 PL074 PL075 PL076 year"
 
 foreach var of local numeric_vars {
     capture confirm variable `var'
@@ -108,12 +115,122 @@ gen months_worked = months_ft_emp + months_pt_emp + months_ft_self + months_pt_s
 replace months_worked = 12 if months_worked > 12 & !missing(months_worked)
 label variable months_worked "Total months worked (employee + self-employed)"
 
-* Equivalised disposable income
-gen eq_hh_ils_dispy = HX090
-label variable eq_hh_ils_dispy "Equivalised income (Eurostat HX090)"
+***********************************************
+* HOUSEHOLD INCOME AND COMPOSITION
+***********************************************
+
+di _n "=== Preparing household income and composition ===" _n
+
+* Household disposable income (HY020)
+capture confirm variable HY020
+if _rc == 0 {
+    gen hh_income = HY020
+    di "Using HY020 for household income"
+}
+else {
+    di as error "ERROR: HY020 (household income) not found!"
+    error 111
+}
+label variable hh_income "Household disposable income (HY020)"
+
+* Get household ID variable (different naming in different SILC versions)
+capture confirm variable DB030
+if _rc == 0 {
+    gen hh_id = DB030
+    di "Using DB030 for household ID"
+}
+else {
+    capture confirm variable HB030
+    if _rc == 0 {
+        gen hh_id = HB030
+        di "Using HB030 for household ID"
+    }
+    else {
+        capture confirm variable idhh
+        if _rc == 0 {
+            gen hh_id = idhh
+            di "Using idhh for household ID"
+        }
+        else {
+            di as error "ERROR: No household ID variable found (DB030, HB030, or idhh)!"
+            error 111
+        }
+    }
+}
+
+***********************************************
+* CALCULATE HOUSEHOLD COMPOSITION
+***********************************************
+
+di _n "=== Calculating household composition ===" _n
+
+* Count adults and children per household (adult threshold = 18 years)
+gen is_adult = (age >= 18)
+gen is_child = (age < 18)
+
+bysort year hh_id: egen n_adults = total(is_adult)
+bysort year hh_id: egen n_children = total(is_child)
+
+label variable n_adults "Number of adults in household (age >= 18)"
+label variable n_children "Number of children in household (age < 18)"
+
+***********************************************
+* ASSIGN EQUIVALENCE FACTOR BY HOUSEHOLD TYPE
+***********************************************
+
+di _n "=== Assigning equivalence factors by household type ===" _n
+
+gen eq_factor = .
+
+* Fixed factors for specific household types
+* 1-Personen-Haushalt (1 adult, 0 children)
+replace eq_factor = 1.0 if n_adults == 1 & n_children == 0
+
+* 1 Erwachsene/r + 1 Kind
+replace eq_factor = 1.3 if n_adults == 1 & n_children == 1
+
+* 2 Erwachsene
+replace eq_factor = 1.5 if n_adults == 2 & n_children == 0
+
+* 2 Erwachsene + 2 Kinder
+replace eq_factor = 2.1 if n_adults == 2 & n_children == 2
+
+* For all other household types: use OECD scale
+* First adult = 1.0, additional adults = 0.5 each, children = 0.3 each
+replace eq_factor = 1.0 + (n_adults - 1) * 0.5 + n_children * 0.3 if missing(eq_factor)
+
+label variable eq_factor "Equivalence factor (custom by household type)"
+
+* Generate household type variable for documentation
+gen byte hh_type = .
+replace hh_type = 1 if n_adults == 1 & n_children == 0
+replace hh_type = 2 if n_adults == 1 & n_children == 1
+replace hh_type = 3 if n_adults == 2 & n_children == 0
+replace hh_type = 4 if n_adults == 2 & n_children == 2
+replace hh_type = 99 if missing(hh_type)
+
+label define hh_type_lbl 1 "1 adult, 0 children (factor 1.0)" ///
+                         2 "1 adult, 1 child (factor 1.3)" ///
+                         3 "2 adults, 0 children (factor 1.5)" ///
+                         4 "2 adults, 2 children (factor 2.1)" ///
+                         99 "Other (OECD scale)"
+label values hh_type hh_type_lbl
+label variable hh_type "Household type"
+
+* Show distribution of household types
+di _n "Distribution of household types:"
+tab hh_type [fw=dwt]
+
+***********************************************
+* CALCULATE EQUIVALISED INCOME
+***********************************************
+
+* Equivalised household income using custom factors
+gen eq_hh_ils_dispy = hh_income / eq_factor
+label variable eq_hh_ils_dispy "Equivalised household income (custom factors)"
 
 * Drop missing values
-drop if missing(eq_hh_ils_dispy) | missing(dwt) | missing(age)
+drop if missing(eq_hh_ils_dispy) | missing(dwt) | missing(age) | missing(hh_income)
 di _n "Observations after dropping missing: " _N _n
 
 ****************************************
@@ -448,9 +565,17 @@ di as result "File saved successfully!"
 di _n "==============================================================================="
 di "COMBINED POVERTY ANALYSIS COMPLETE - EU-SILC 2015-2023"
 di "==============================================================================="
+di "Method: Custom equivalence factors by household type"
+di "  - 1 adult, 0 children: factor 1.0"
+di "  - 1 adult, 1 child: factor 1.3"
+di "  - 2 adults, 0 children: factor 1.5"
+di "  - 2 adults, 2 children: factor 2.1"
+di "  - Other households: OECD scale"
+di "Income source: HY020 (household disposable income)"
+di "==============================================================================="
 di "Output files:"
-di "  - poverty_combined_microdata_SILC_AllYears.dta (microdata with AROP + IWP)"
-di "  - poverty_combined_analysis_SILC_AllYears.xlsx (summary statistics)"
+di "  - ALL_POV_IND_SILC_ORGIN.dta (microdata with AROP + IWP)"
+di "  - ALL_POV_IND_SILC_ORGIN.xlsx (summary statistics)"
 di "==============================================================================="
 
 list Variable Value_*, clean noobs
