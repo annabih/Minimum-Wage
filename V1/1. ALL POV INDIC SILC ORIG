@@ -1,16 +1,17 @@
 *******************************************************************************************************************************************************************************************
 *** Titel: Combined Poverty Analysis using merged EU-SILC Austria 2015-2023
-*** Date: 16.01.2026 (Updated - uses original SILC variable names)
+*** Date: 16.01.2026 (Updated - uses original SILC variable names, gender-specific analysis)
 *** Aim: Overall poverty (AROP) and In-work poverty calculation with household-type specific equivalence factors
 *** Method: Uses HY020 (household income) with custom equivalence factors by household composition
 *** Equivalence factors:
 ***   - 1 adult, 0 children: 1.0
-***   - 1 adult, 1 child: 1.3
+***   - 1 adult, 1+ children: 1.3+ (OECD for 2+ children)
 ***   - 2 adults, 0 children: 1.5
 ***   - 2 adults, 2 children: 2.1
 ***   - Other household types: OECD scale (1.0 + (n_adults-1)*0.5 + n_children*0.3)
+*** Gender breakdown: Single-adult households (with/without children) separated by male/female
 *** Note: Poverty threshold is recalculated for each year
-*** Note: Uses original SILC variable names (PX030, PB030, RX010, RB050, etc.) - no renaming
+*** Note: Uses original SILC variable names (PX030, PB030, RX010, RB050, RB090, etc.) - no renaming
 *******************************************************************************************************************************************************************************************
 clear all
 set more off
@@ -28,7 +29,7 @@ di _n "=== Original observations: " _N " ===" _n
 
 di _n "=== Destringing variables ===" _n
 
-local numeric_vars "HX090 HY020 HX040 DB030 HB030 PX030 RX030 RB050 PB040 RX010 PX010 PL073 PL074 PL075 PL076 year"
+local numeric_vars "HX090 HY020 HX040 DB030 HB030 PX030 RX030 RB050 PB040 RX010 PX010 RB090 PB150 PL073 PL074 PL075 PL076 year"
 
 foreach var of local numeric_vars {
     capture confirm variable `var'
@@ -202,6 +203,36 @@ bysort year `hh_id_var': egen n_children = total(is_child)
 label variable n_adults "Number of adults in household (age >= 18)"
 label variable n_children "Number of children in household (age < 18)"
 
+* Identify gender of adult in single-adult households
+* Check which gender variable exists
+capture confirm variable RB090
+if _rc == 0 {
+    local gender_var "RB090"
+    di "Using RB090 as gender variable"
+}
+else {
+    capture confirm variable PB150
+    if _rc == 0 {
+        local gender_var "PB150"
+        di "Using PB150 as gender variable"
+    }
+    else {
+        di as error "WARNING: No gender variable found (RB090 or PB150)! Gender-specific analysis will not be possible."
+        gen gender_single_adult = .
+    }
+}
+
+* For single-adult households, identify the gender of that adult
+if "`gender_var'" != "" {
+    gen gender_single_adult = .
+    replace gender_single_adult = `gender_var' if n_adults == 1 & is_adult == 1
+    bysort year `hh_id_var': egen hh_adult_gender = max(gender_single_adult)
+    label variable hh_adult_gender "Gender of adult in single-adult household (1=male, 2=female)"
+}
+else {
+    gen hh_adult_gender = .
+}
+
 ***********************************************
 * ASSIGN EQUIVALENCE FACTOR BY HOUSEHOLD TYPE
 ***********************************************
@@ -229,17 +260,33 @@ replace eq_factor = 1.0 + (n_adults - 1) * 0.5 + n_children * 0.3 if missing(eq_
 
 label variable eq_factor "Equivalence factor (custom by household type)"
 
-* Generate household type variable for documentation
+* Generate household type variable for documentation (with gender breakdown for singles)
 gen byte hh_type = .
-replace hh_type = 1 if n_adults == 1 & n_children == 0
-replace hh_type = 2 if n_adults == 1 & n_children == 1
-replace hh_type = 3 if n_adults == 2 & n_children == 0
-replace hh_type = 4 if n_adults == 2 & n_children == 2
+
+* Single adult households by gender
+replace hh_type = 1 if n_adults == 1 & n_children == 0 & hh_adult_gender == 1  // male
+replace hh_type = 2 if n_adults == 1 & n_children == 0 & hh_adult_gender == 2  // female
+
+* Single adult with children by gender
+replace hh_type = 3 if n_adults == 1 & n_children >= 1 & hh_adult_gender == 1  // male with child(ren)
+replace hh_type = 4 if n_adults == 1 & n_children >= 1 & hh_adult_gender == 2  // female with child(ren)
+
+* Two adults (no gender breakdown)
+replace hh_type = 5 if n_adults == 2 & n_children == 0
+replace hh_type = 6 if n_adults == 2 & n_children == 2
+
+* Other household types
 replace hh_type = 99 if missing(hh_type)
 
-label define hh_type_lbl 1 "1 adult, 0 children (factor 1.0)" 2 "1 adult, 1 child (factor 1.3)" 3 "2 adults, 0 children (factor 1.5)" 4 "2 adults, 2 children (factor 2.1)" 99 "Other (OECD scale)"
+label define hh_type_lbl 1 "1 adult male, 0 children (factor 1.0)" ///
+                         2 "1 adult female, 0 children (factor 1.0)" ///
+                         3 "1 adult male, 1+ children (factor 1.3+)" ///
+                         4 "1 adult female, 1+ children (factor 1.3+)" ///
+                         5 "2 adults, 0 children (factor 1.5)" ///
+                         6 "2 adults, 2 children (factor 2.1)" ///
+                         99 "Other (OECD scale)"
 label values hh_type hh_type_lbl
-label variable hh_type "Household type"
+label variable hh_type "Household type (gender-specific for singles)"
 
 * Show distribution of household types
 di _n "Distribution of household types:"
@@ -431,9 +478,9 @@ foreach yr of local years {
 
 di _n "=== Calculating statistics BY HOUSEHOLD TYPE ===" _n
 
-* Define household types
-local hh_types "1 2 3 4 99"
-local hh_labels `" "1A0C" "1A1C" "2A0C" "2A2C" "Other" "'
+* Define household types (now with gender breakdown for singles)
+local hh_types "1 2 3 4 5 6 99"
+local hh_labels `" "1M0C" "1F0C" "1MC" "1FC" "2A0C" "2A2C" "Other" "'
 
 local ht_idx = 1
 foreach ht of local hh_types {
@@ -706,10 +753,10 @@ export excel "$output/ALL_POV_IND_SILC_ORGIN.xlsx", replace sheet("Overall") fir
 
 di _n "=== Creating Excel output BY HOUSEHOLD TYPE ===" _n
 
-* Define household types and labels
-local hh_types "1 2 3 4 99"
-local hh_labels `" "1A0C" "1A1C" "2A0C" "2A2C" "Other" "'
-local hh_names `" "1Adult_0Children" "1Adult_1Child" "2Adults_0Children" "2Adults_2Children" "Other_OECD" "'
+* Define household types and labels (with gender breakdown for singles)
+local hh_types "1 2 3 4 5 6 99"
+local hh_labels `" "1M0C" "1F0C" "1MC" "1FC" "2A0C" "2A2C" "Other" "'
+local hh_names `" "1Male_0Children" "1Female_0Children" "1Male_Children" "1Female_Children" "2Adults_0Children" "2Adults_2Children" "Other_OECD" "'
 
 local ht_idx = 1
 foreach ht of local hh_types {
@@ -827,8 +874,20 @@ foreach ht of local hh_types {
     replace Variable = "" in `row'
     local row = `row' + 1
 
-    * INCOME SECTION
+    * INCOME AND POVERTY THRESHOLD SECTION
     replace Variable = "=== INCOME INDICATORS ===" in `row'
+    local row = `row' + 1
+
+    replace Variable = "Poverty threshold (Euro, annual)" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `pov_line_`yr'' in `row'
+    }
+    local row = `row' + 1
+
+    replace Variable = "Poverty threshold (Euro, monthly)" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `pov_line_month_`yr'' in `row'
+    }
     local row = `row' + 1
 
     replace Variable = "Mean equiv. income (Euro, annual)" in `row'
@@ -863,21 +922,25 @@ di "COMBINED POVERTY ANALYSIS COMPLETE - EU-SILC 2015-2023"
 di "==============================================================================="
 di "Method: Custom equivalence factors by household type"
 di "  - 1 adult, 0 children: factor 1.0"
-di "  - 1 adult, 1 child: factor 1.3"
+di "  - 1 adult, 1+ children: factor 1.3+ (OECD for 2+ children)"
 di "  - 2 adults, 0 children: factor 1.5"
 di "  - 2 adults, 2 children: factor 2.1"
 di "  - Other households: OECD scale"
 di "Income source: HY020 (household disposable income)"
+di "Gender breakdown: Single-adult households separated by male/female"
 di "==============================================================================="
 di "Output files:"
 di "  - ALL_POV_IND_SILC_ORGIN.dta (microdata with AROP + IWP)"
-di "  - ALL_POV_IND_SILC_ORGIN.xlsx with 6 sheets:"
+di "  - ALL_POV_IND_SILC_ORGIN.xlsx with 8 sheets:"
 di "      * Overall - Overall statistics across all households"
-di "      * 1Adult_0Children - Single person households"
-di "      * 1Adult_1Child - Single parent with one child"
+di "      * 1Male_0Children - Single male, no children"
+di "      * 1Female_0Children - Single female, no children"
+di "      * 1Male_Children - Single male with child(ren)"
+di "      * 1Female_Children - Single female with child(ren)"
 di "      * 2Adults_0Children - Couple without children"
 di "      * 2Adults_2Children - Couple with two children"
 di "      * Other_OECD - Other household types (using OECD scale)"
+di "  Each sheet includes poverty threshold (annual & monthly) and mean income"
 di "==============================================================================="
 
 list Variable Value_*, clean noobs
