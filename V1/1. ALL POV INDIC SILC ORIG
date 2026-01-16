@@ -29,7 +29,7 @@ di _n "=== Original observations: " _N " ===" _n
 
 di _n "=== Destringing variables ===" _n
 
-local numeric_vars "HX090 HY020 HX040 DB030 HB030 PX030 RX030 RB050 PB040 RX010 PX010 RB090 PB150 PL073 PL074 PL075 PL076 year"
+local numeric_vars "HX090 HY020 HX040 DB030 HB030 PX030 RX030 RB050 PB040 RX010 PX010 RB090 PB150 PL031 PL073 PL074 PL075 PL076 year"
 
 foreach var of local numeric_vars {
     capture confirm variable `var'
@@ -132,6 +132,37 @@ else {
 gen months_worked = months_ft_emp + months_pt_emp + months_ft_self + months_pt_self
 replace months_worked = 12 if months_worked > 12 & !missing(months_worked)
 label variable months_worked "Total months worked (employee + self-employed)"
+
+***********************************************
+* EXCLUDE PENSIONERS AND PEOPLE IN EDUCATION
+***********************************************
+
+di _n "=== Excluding pensioners and people in education/training ===" _n
+
+di "Observations before exclusion: " _N
+
+capture confirm variable PL031
+if _rc == 0 {
+    * Count exclusions by category
+    quietly count if PL031 == 5
+    local n_pensioners = r(N)
+    quietly count if PL031 == 4
+    local n_education = r(N)
+
+    di "  Pensioners (PL031=5): " `n_pensioners'
+    di "  In education/training (PL031=4): " `n_education'
+
+    * Exclude both groups
+    drop if PL031 == 5  // Pensioners, in retirement or early retirement
+    drop if PL031 == 4  // Pupils, students, in training
+
+    di "Observations after exclusion: " _N
+    local n_excluded = `n_pensioners' + `n_education'
+    di "Total excluded: " `n_excluded'
+}
+else {
+    di as text "WARNING: PL031 (economic status) not found - cannot exclude by economic status"
+}
 
 ***********************************************
 * HOUSEHOLD INCOME AND COMPOSITION
