@@ -134,56 +134,6 @@ replace months_worked = 12 if months_worked > 12 & !missing(months_worked)
 label variable months_worked "Total months worked (employee + self-employed)"
 
 ***********************************************
-* EXCLUDE PENSIONERS AND PEOPLE IN EDUCATION
-***********************************************
-
-di _n "=== Excluding pensioners and people in education/training ===" _n
-
-di "Observations before exclusion: " _N
-
-capture confirm variable PL032
-if _rc == 0 {
-    * PL032 coding changed in 2021 (PB010 variable indicates year)
-    * For PB010>=2021: 3=Retired, 5=Student
-    * For PB010<=2020: 7=Retired, 6=Student (Code 3=Self-employed, must NOT exclude!)
-
-    capture confirm variable PB010
-    if _rc == 0 {
-        * Count exclusions by year and category
-        quietly count if PB010 >= 2021 & PL032 == 3
-        local n_pensioners_new = r(N)
-        quietly count if PB010 <= 2020 & PL032 == 7
-        local n_pensioners_old = r(N)
-
-        quietly count if PB010 >= 2021 & PL032 == 5
-        local n_education_new = r(N)
-        quietly count if PB010 <= 2020 & PL032 == 6
-        local n_education_old = r(N)
-
-        di "  Pensioners (2021-2024, PL032=3): " `n_pensioners_new'
-        di "  Pensioners (2015-2020, PL032=7): " `n_pensioners_old'
-        di "  Students (2021-2024, PL032=5): " `n_education_new'
-        di "  Students (2015-2020, PL032=6): " `n_education_old'
-
-        * Exclude pensioners and students (different codes by year)
-        drop if (PB010 >= 2021 & PL032 == 3)  // Retired (new coding)
-        drop if (PB010 <= 2020 & PL032 == 7)  // Retired (old coding)
-        drop if (PB010 >= 2021 & PL032 == 5)  // Student (new coding)
-        drop if (PB010 <= 2020 & PL032 == 6)  // Student (old coding)
-
-        di "Observations after exclusion: " _N
-        local n_excluded = `n_pensioners_new' + `n_pensioners_old' + `n_education_new' + `n_education_old'
-        di "Total excluded: " `n_excluded'
-    }
-    else {
-        di as error "WARNING: PB010 not found - cannot distinguish year coding!"
-    }
-}
-else {
-    di as text "WARNING: PL032 (economic status) not found - cannot exclude by economic status"
-}
-
-***********************************************
 * HOUSEHOLD INCOME AND COMPOSITION
 ***********************************************
 
@@ -421,6 +371,59 @@ label variable pov_threshold_hh "Household-specific poverty threshold (absolute)
 * Also create monthly version
 gen pov_threshold_hh_month = pov_threshold_hh / 12
 label variable pov_threshold_hh_month "Household-specific poverty threshold (monthly)"
+
+***********************************************
+* EXCLUDE PENSIONERS AND PEOPLE IN EDUCATION
+***********************************************
+* NOTE: Exclusion happens AFTER threshold calculation (to match official methodology)
+* The poverty threshold is calculated over the ENTIRE population
+* but poverty rates exclude pensioners and students
+
+di _n "=== Excluding pensioners and people in education/training ===" _n
+
+di "Observations before exclusion: " _N
+
+capture confirm variable PL032
+if _rc == 0 {
+    * PL032 coding changed in 2021 (PB010 variable indicates year)
+    * For PB010>=2021: 3=Retired, 5=Student
+    * For PB010<=2020: 7=Retired, 6=Student (Code 3=Self-employed, must NOT exclude!)
+
+    capture confirm variable PB010
+    if _rc == 0 {
+        * Count exclusions by year and category
+        quietly count if PB010 >= 2021 & PL032 == 3
+        local n_pensioners_new = r(N)
+        quietly count if PB010 <= 2020 & PL032 == 7
+        local n_pensioners_old = r(N)
+
+        quietly count if PB010 >= 2021 & PL032 == 5
+        local n_education_new = r(N)
+        quietly count if PB010 <= 2020 & PL032 == 6
+        local n_education_old = r(N)
+
+        di "  Pensioners (2021-2024, PL032=3): " `n_pensioners_new'
+        di "  Pensioners (2015-2020, PL032=7): " `n_pensioners_old'
+        di "  Students (2021-2024, PL032=5): " `n_education_new'
+        di "  Students (2015-2020, PL032=6): " `n_education_old'
+
+        * Exclude pensioners and students (different codes by year)
+        drop if (PB010 >= 2021 & PL032 == 3)  // Retired (new coding)
+        drop if (PB010 <= 2020 & PL032 == 7)  // Retired (old coding)
+        drop if (PB010 >= 2021 & PL032 == 5)  // Student (new coding)
+        drop if (PB010 <= 2020 & PL032 == 6)  // Student (old coding)
+
+        di "Observations after exclusion: " _N
+        local n_excluded = `n_pensioners_new' + `n_pensioners_old' + `n_education_new' + `n_education_old'
+        di "Total excluded: " `n_excluded'
+    }
+    else {
+        di as error "WARNING: PB010 not found - cannot distinguish year coding!"
+    }
+}
+else {
+    di as text "WARNING: PL032 (economic status) not found - cannot exclude by economic status"
+}
 
 ****************************************
 * Generate poverty status
