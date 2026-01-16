@@ -1,17 +1,8 @@
 *******************************************************************************************************************************************************************************************
 *** Titel: Combined Poverty Analysis using merged EU-SILC Austria 2015-2023
-*** Date: 16.01.2026 (Updated - uses original SILC variable names, gender-specific analysis)
+*** Date: 16.01.2026 
 *** Aim: Overall poverty (AROP) and In-work poverty calculation with household-type specific equivalence factors
 *** Method: Uses HY020 (household income) with custom equivalence factors by household composition
-*** Equivalence factors:
-***   - 1 adult, 0 children: 1.0
-***   - 1 adult, 1+ children: 1.3+ (OECD for 2+ children)
-***   - 2 adults, 0 children: 1.5
-***   - 2 adults, 2 children: 2.1
-***   - Other household types: OECD scale (1.0 + (n_adults-1)*0.5 + n_children*0.3)
-*** Gender breakdown: Single-adult households (with/without children) separated by male/female
-*** Note: Poverty threshold is recalculated for each year
-*** Note: Uses original SILC variable names (PX030, PB030, RX010, RB050, RB090, etc.) - no renaming
 *******************************************************************************************************************************************************************************************
 clear all
 set more off
@@ -29,7 +20,7 @@ di _n "=== Original observations: " _N " ===" _n
 
 di _n "=== Destringing variables ===" _n
 
-local numeric_vars "HX090 HY020 HX040 DB030 HB030 PX030 RX030 RB050 PB040 RX010 PX010 RB090 PB150 PL032 PB010 PL073 PL074 PL075 PL076 year"
+local numeric_vars "HX090 RB050 PB040 RX010 PX010 PL073 PL074 PL075 PL076 year"
 
 foreach var of local numeric_vars {
     capture confirm variable `var'
@@ -56,41 +47,25 @@ foreach var of local numeric_vars {
 
 di _n "=== Preparing variables ===" _n
 
-* Check which weight variable exists (RB050 or PB040)
+* Personal weight
 capture confirm variable RB050
 if _rc == 0 {
-    local wt_var "RB050"
-    di "Using RB050 as weight variable"
+    gen dwt = RB050
 }
 else {
-    capture confirm variable PB040
-    if _rc == 0 {
-        local wt_var "PB040"
-        di "Using PB040 as weight variable"
-    }
-    else {
-        di as error "ERROR: No weight variable found (RB050 or PB040)!"
-        error 111
-    }
+    gen dwt = PB040
 }
+label variable dwt "Personal cross-sectional weight"
 
-* Check which age variable exists (RX010 or PX010)
+* Age
 capture confirm variable RX010
 if _rc == 0 {
-    local age_var "RX010"
-    di "Using RX010 as age variable"
+    gen age = RX010
 }
 else {
-    capture confirm variable PX010
-    if _rc == 0 {
-        local age_var "PX010"
-        di "Using PX010 as age variable"
-    }
-    else {
-        di as error "ERROR: No age variable found (RX010 or PX010)!"
-        error 111
-    }
+    gen age = PX010
 }
+label variable age "Age"
 
 * Months worked - ALL work (employee + self-employed)
 capture confirm variable PL073
@@ -133,194 +108,12 @@ gen months_worked = months_ft_emp + months_pt_emp + months_ft_self + months_pt_s
 replace months_worked = 12 if months_worked > 12 & !missing(months_worked)
 label variable months_worked "Total months worked (employee + self-employed)"
 
-***********************************************
-* HOUSEHOLD INCOME AND COMPOSITION
-***********************************************
-
-di _n "=== Preparing household income and composition ===" _n
-
-* Check household disposable income variable exists (HY020)
-capture confirm variable HY020
-if _rc != 0 {
-    di as error "ERROR: HY020 (household income) not found!"
-    error 111
-}
-di "Using HY020 for household income"
-
-* Identify household ID variable (different naming in different SILC versions)
-* Priority: PX030 (from P-file), then RX030 (from R-file), then HB030, DB030, or id_hh
-capture confirm variable PX030
-if _rc == 0 {
-    local hh_id_var "PX030"
-    di "Using PX030 as household ID"
-}
-else {
-    capture confirm variable RX030
-    if _rc == 0 {
-        local hh_id_var "RX030"
-        di "Using RX030 as household ID"
-    }
-    else {
-        capture confirm variable HB030
-        if _rc == 0 {
-            local hh_id_var "HB030"
-            di "Using HB030 as household ID"
-        }
-        else {
-            capture confirm variable DB030
-            if _rc == 0 {
-                local hh_id_var "DB030"
-                di "Using DB030 as household ID"
-            }
-            else {
-                capture confirm variable id_hh
-                if _rc == 0 {
-                    local hh_id_var "id_hh"
-                    di "Using id_hh as household ID"
-                }
-                else {
-                    di as error "ERROR: No household ID variable found (PX030, RX030, HB030, DB030, or id_hh)!"
-                    error 111
-                }
-            }
-        }
-    }
-}
-
-***********************************************
-* CALCULATE HOUSEHOLD COMPOSITION
-***********************************************
-
-di _n "=== Calculating household composition ===" _n
-
-* Count adults and children per household (adult threshold = 18 years)
-gen is_adult = (`age_var' >= 18)
-gen is_child = (`age_var' < 18)
-
-bysort year `hh_id_var': egen n_adults = total(is_adult)
-bysort year `hh_id_var': egen n_children = total(is_child)
-
-label variable n_adults "Number of adults in household (age >= 18)"
-label variable n_children "Number of children in household (age < 18)"
-
-* Identify gender of adult in single-adult households
-* Check which gender variable exists
-capture confirm variable RB090
-if _rc == 0 {
-    local gender_var "RB090"
-    di "Using RB090 as gender variable"
-}
-else {
-    capture confirm variable PB150
-    if _rc == 0 {
-        local gender_var "PB150"
-        di "Using PB150 as gender variable"
-    }
-    else {
-        di as error "WARNING: No gender variable found (RB090 or PB150)! Gender-specific analysis will not be possible."
-        gen gender_single_adult = .
-    }
-}
-
-* For single-adult households, identify the gender of that adult
-if "`gender_var'" != "" {
-    gen gender_single_adult = .
-    replace gender_single_adult = `gender_var' if n_adults == 1 & is_adult == 1
-    bysort year `hh_id_var': egen hh_adult_gender = max(gender_single_adult)
-    label variable hh_adult_gender "Gender of adult in single-adult household (1=female, 2=male)"
-}
-else {
-    gen hh_adult_gender = .
-}
-
-***********************************************
-* ASSIGN EQUIVALENCE FACTOR BY HOUSEHOLD TYPE
-***********************************************
-
-di _n "=== Assigning equivalence factors by household type ===" _n
-
-gen eq_factor = .
-
-* Fixed factors for specific household types
-* 1-Personen-Haushalt (1 adult, 0 children)
-replace eq_factor = 1.0 if n_adults == 1 & n_children == 0
-
-* 1 Erwachsene/r + 1 Kind
-replace eq_factor = 1.3 if n_adults == 1 & n_children == 1
-
-* 2 Erwachsene
-replace eq_factor = 1.5 if n_adults == 2 & n_children == 0
-
-* 2 Erwachsene + 2 Kinder
-replace eq_factor = 2.1 if n_adults == 2 & n_children == 2
-
-* For all other household types: use OECD scale
-* First adult = 1.0, additional adults = 0.5 each, children = 0.3 each
-replace eq_factor = 1.0 + (n_adults - 1) * 0.5 + n_children * 0.3 if missing(eq_factor)
-
-label variable eq_factor "Equivalence factor (custom by household type)"
-
-* Generate household type variable for documentation (with gender breakdown for singles)
-gen byte hh_type = .
-
-* Gender-specific single adult households - females (gender=1)
-replace hh_type = 11 if n_adults == 1 & n_children == 0 & hh_adult_gender == 1
-replace hh_type = 12 if n_adults == 1 & n_children == 1 & hh_adult_gender == 1 
-replace hh_type = 13 if n_adults == 1 & n_children == 2 & hh_adult_gender == 1
-replace hh_type = 14 if n_adults == 1 & n_children >= 3 & hh_adult_gender == 1 
-
-* Gender-specific single adult households - males (gender=2)
-replace hh_type = 21 if n_adults == 1 & n_children == 0 & hh_adult_gender == 2  
-replace hh_type = 22 if n_adults == 1 & n_children == 1 & hh_adult_gender == 2 
-replace hh_type = 23 if n_adults == 1 & n_children == 2 & hh_adult_gender == 2 
-replace hh_type = 24 if n_adults == 1 & n_children >= 3 & hh_adult_gender == 2 
-
-* Two adults (no gender breakdown)
-replace hh_type = 5 if n_adults == 2 & n_children == 0
-replace hh_type = 6 if n_adults == 2 & n_children == 2
-
-* Other household types
-replace hh_type = 99 if missing(hh_type)
-
-* Create auxiliary variable for overall single-adult households (combining male+female)
-gen byte hh_type_overall = .
-replace hh_type_overall = 1 if inlist(hh_type, 11, 21) 
-replace hh_type_overall = 2 if inlist(hh_type, 12, 22)
-replace hh_type_overall = 3 if inlist(hh_type, 13, 23)  
-replace hh_type_overall = 4 if inlist(hh_type, 14, 24) 
-replace hh_type_overall = hh_type if inlist(hh_type, 5, 6, 99) 
-label define hh_type_lbl 11 "1 female, 0 children (factor 1.0)" 12 "1 female, 1 child (factor 1.3)" 13 "1 female, 2 children (factor 1.6)" 14 "1 female, 3+ children (factor 1.9+)" 21 "1 male, 0 children (factor 1.0)" 22 "1 male, 1 child (factor 1.3)" 23 "1 male, 2 children (factor 1.6)" 24 "1 male, 3+ children (factor 1.9+)" 5 "2 adults, 0 children (factor 1.5)" 6 "2 adults, 2 children (factor 2.1)" 99 "Other (OECD scale)"
-label values hh_type hh_type_lbl
-label variable hh_type "Household type (gender-specific for singles)"
-
-label define hh_type_overall_lbl 1 "1 adult, 0 children (factor 1.0)" 2 "1 adult, 1 child (factor 1.3)" 3 "1 adult, 2 children (factor 1.6)" 4 "1 adult, 3+ children (factor 1.9+)" 5 "2 adults, 0 children (factor 1.5)" 6 "2 adults, 2 children (factor 2.1)" 99 "Other (OECD scale)"
-label values hh_type_overall hh_type_overall_lbl
-label variable hh_type_overall "Household type (overall, gender combined)"
-
-* Show distribution of household types
-di _n "Distribution of household types (gender-specific):"
-* Round weights to avoid "may not use noninteger frequency weights" error
-gen wt_rounded = round(`wt_var')
-tab hh_type [fw=wt_rounded]
-
-di _n "Distribution of household types (overall, gender combined):"
-tab hh_type_overall [fw=wt_rounded]
-drop wt_rounded
-
-***********************************************
-* CALCULATE EQUIVALISED INCOME
-***********************************************
-
-* Equivalised household income using custom factors
-gen eq_hh_ils_dispy = HY020 / eq_factor
-label variable eq_hh_ils_dispy "Equivalised household income (custom factors)"
-
-* Store eq_factor for each household for later use in calculating household-specific thresholds
-gen hh_eq_factor = eq_factor
-label variable hh_eq_factor "Household equivalence factor"
+* Equivalised disposable income
+gen eq_hh_ils_dispy = HX090
+label variable eq_hh_ils_dispy "Equivalised income (Eurostat HX090)"
 
 * Drop missing values
-drop if missing(eq_hh_ils_dispy) | missing(`wt_var') | missing(`age_var') | missing(HY020)
+drop if missing(eq_hh_ils_dispy) | missing(dwt) | missing(age)
 di _n "Observations after dropping missing: " _N _n
 
 ****************************************
@@ -334,7 +127,7 @@ postfile `h' int year double median_eq_hh_ils_dispy pov_threshold_60 using `thre
 foreach yr of local years {
     quietly count if year==`yr'
     if r(N)==0 continue
-    quietly _pctile eq_hh_ils_dispy [pw=`wt_var'] if year==`yr', p(50)
+    quietly _pctile eq_hh_ils_dispy [pw=dwt] if year==`yr', p(50)
     local median_val = r(r1)
     post `h' (`yr') (`median_val') (0.60*`median_val')
     di "Year `yr' Median=" %12.2f `median_val' " Threshold=" %12.2f (0.60*`median_val')
@@ -343,68 +136,6 @@ foreach yr of local years {
 postclose `h'
 
 merge m:1 year using `thresholds', nogen
-
-* Calculate household-specific poverty threshold (absolute, not equivalised)
-* This is the income threshold adjusted for household size/composition
-gen pov_threshold_hh = pov_threshold_60 * hh_eq_factor
-label variable pov_threshold_hh "Household-specific poverty threshold (absolute)"
-
-* Also create monthly version
-gen pov_threshold_hh_month = pov_threshold_hh / 12
-label variable pov_threshold_hh_month "Household-specific poverty threshold (monthly)"
-
-***********************************************
-* EXCLUDE PENSIONERS AND PEOPLE IN EDUCATION
-***********************************************
-* NOTE: Exclusion happens AFTER threshold calculation (to match official methodology)
-* The poverty threshold is calculated over the ENTIRE population
-* but poverty rates exclude pensioners and students
-
-di _n "=== Excluding pensioners and people in education/training ===" _n
-
-di "Observations before exclusion: " _N
-
-capture confirm variable PL032
-if _rc == 0 {
-    * PL032 coding changed in 2021 (PB010 variable indicates year)
-    * For PB010>=2021: 3=Retired, 5=Student
-    * For PB010<=2020: 7=Retired, 6=Student (Code 3=Self-employed, must NOT exclude!)
-
-    capture confirm variable PB010
-    if _rc == 0 {
-        * Count exclusions by year and category
-        quietly count if PB010 >= 2021 & PL032 == 3
-        local n_pensioners_new = r(N)
-        quietly count if PB010 <= 2020 & PL032 == 7
-        local n_pensioners_old = r(N)
-
-        quietly count if PB010 >= 2021 & PL032 == 5
-        local n_education_new = r(N)
-        quietly count if PB010 <= 2020 & PL032 == 6
-        local n_education_old = r(N)
-
-        di "  Pensioners (2021-2024, PL032=3): " `n_pensioners_new'
-        di "  Pensioners (2015-2020, PL032=7): " `n_pensioners_old'
-        di "  Students (2021-2024, PL032=5): " `n_education_new'
-        di "  Students (2015-2020, PL032=6): " `n_education_old'
-
-        * Exclude pensioners and students (different codes by year)
-        drop if (PB010 >= 2021 & PL032 == 3)  // Retired (new coding)
-        drop if (PB010 <= 2020 & PL032 == 7)  // Retired (old coding)
-        drop if (PB010 >= 2021 & PL032 == 5)  // Student (new coding)
-        drop if (PB010 <= 2020 & PL032 == 6)  // Student (old coding)
-
-        di "Observations after exclusion: " _N
-        local n_excluded = `n_pensioners_new' + `n_pensioners_old' + `n_education_new' + `n_education_old'
-        di "Total excluded: " `n_excluded'
-    }
-    else {
-        di as error "WARNING: PB010 not found - cannot distinguish year coding!"
-    }
-}
-else {
-    di as text "WARNING: PL032 (economic status) not found - cannot exclude by economic status"
-}
 
 ****************************************
 * Generate poverty status
@@ -425,9 +156,9 @@ label variable arop_gap_rel "Poverty gap relative (%)"
 
 * Age groups
 gen age_group = .
-replace age_group = 1 if `age_var' < 18
-replace age_group = 2 if `age_var' >= 18 & `age_var' < 65
-replace age_group = 3 if `age_var' >= 65
+replace age_group = 1 if age < 18
+replace age_group = 2 if age >= 18 & age < 65
+replace age_group = 3 if age >= 65
 label define age_lbl 1 "Children (<18)" 2 "Working age (18-64)" 3 "Elderly (65+)"
 label values age_group age_lbl
 
@@ -435,7 +166,7 @@ label values age_group age_lbl
 * Identify workers and in-work poverty
 ****************************************
 
-gen worker = (months_worked > 6 & `age_var' >= 18 & `age_var' <= 64)
+gen worker = (months_worked > 6 & age >= 18 & age <= 64)
 label variable worker "Worker (>6 months, age 18-64)"
 
 gen inwork_poor = (worker == 1 & arop == 1)
@@ -458,35 +189,35 @@ save "$output//ALL_POV_IND_SILC_ORGIN.dta", replace
 di "Micro-level data saved with both AROP and IWP variables"
 
 ***************************************
-* Calculate statistics by year - OVERALL
+* Calculate statistics by year
 ***************************************
 
-di _n "=== Calculating OVERALL statistics by year ===" _n
+di _n "=== Calculating statistics by year ===" _n
 
 foreach yr of local years {
-
+    
     quietly count if year == `yr'
     if r(N) == 0 continue
-
+    
     * OVERALL POVERTY (AROP)
-    sum arop [aw=`wt_var'] if year == `yr'
+    sum arop [aw=dwt] if year == `yr'
     local arop_rate_`yr' = r(mean) * 100
-
-    sum `wt_var' if year == `yr'
+    
+    sum dwt if year == `yr'
     local n_total_`yr' = r(sum)
-
-    gen temp_arop_`yr' = arop * `wt_var' if year == `yr'
+    
+    gen temp_arop_`yr' = arop * dwt if year == `yr'
     sum temp_arop_`yr'
     local n_arop_`yr' = r(sum)
     drop temp_arop_`yr'
-
+    
     quietly count if year == `yr' & arop == 1
     if r(N) > 0 {
-        sum arop_gap_abs [aw=`wt_var'] if year == `yr' & arop == 1
+        sum arop_gap_abs [aw=dwt] if year == `yr' & arop == 1
         local arop_gap_abs_`yr' = r(mean)
         local arop_gap_abs_month_`yr' = r(mean) / 12
-
-        sum arop_gap_rel [aw=`wt_var'] if year == `yr' & arop == 1
+        
+        sum arop_gap_rel [aw=dwt] if year == `yr' & arop == 1
         local arop_gap_rel_`yr' = r(mean)
     }
     else {
@@ -494,28 +225,28 @@ foreach yr of local years {
         local arop_gap_abs_month_`yr' = .
         local arop_gap_rel_`yr' = .
     }
-
+    
     * IN-WORK POVERTY (IWP)
     quietly count if year == `yr' & worker == 1
     if r(N) > 0 {
-        sum inwork_poor [aw=`wt_var'] if year == `yr' & worker == 1
+        sum inwork_poor [aw=dwt] if year == `yr' & worker == 1
         local iwp_rate_`yr' = r(mean) * 100
-
-        sum `wt_var' if year == `yr' & worker == 1
+        
+        sum dwt if year == `yr' & worker == 1
         local n_workers_`yr' = r(sum)
-
-        gen temp_iwp_`yr' = inwork_poor * `wt_var' if year == `yr' & worker == 1
+        
+        gen temp_iwp_`yr' = inwork_poor * dwt if year == `yr' & worker == 1
         sum temp_iwp_`yr'
         local n_iwp_`yr' = r(sum)
         drop temp_iwp_`yr'
-
+        
         quietly count if year == `yr' & inwork_poor == 1
         if r(N) > 0 {
-            sum iwp_gap_abs [aw=`wt_var'] if year == `yr' & inwork_poor == 1
+            sum iwp_gap_abs [aw=dwt] if year == `yr' & inwork_poor == 1
             local iwp_gap_abs_`yr' = r(mean)
             local iwp_gap_abs_month_`yr' = r(mean) / 12
-
-            sum iwp_gap_rel [aw=`wt_var'] if year == `yr' & inwork_poor == 1
+            
+            sum iwp_gap_rel [aw=dwt] if year == `yr' & inwork_poor == 1
             local iwp_gap_rel_`yr' = r(mean)
         }
         else {
@@ -523,8 +254,8 @@ foreach yr of local years {
             local iwp_gap_abs_month_`yr' = .
             local iwp_gap_rel_`yr' = .
         }
-
-        sum months_worked [aw=`wt_var'] if year == `yr' & worker == 1
+        
+        sum months_worked [aw=dwt] if year == `yr' & worker == 1
         local months_`yr' = r(mean)
     }
     else {
@@ -536,158 +267,28 @@ foreach yr of local years {
         local iwp_gap_rel_`yr' = .
         local months_`yr' = .
     }
-
+    
     * SHARED VARIABLES
     sum pov_threshold_60 if year == `yr', meanonly
     local pov_line_`yr' = r(mean)
     local pov_line_month_`yr' = r(mean) / 12
-
+    
     sum median_eq_hh_ils_dispy if year == `yr', meanonly
     local median_inc_`yr' = r(mean)
     local median_inc_month_`yr' = r(mean) / 12
-
-    sum eq_hh_ils_dispy [aw=`wt_var'] if year == `yr'
+    
+    sum eq_hh_ils_dispy [aw=dwt] if year == `yr'
     local mean_inc_`yr' = r(mean)
     local mean_inc_month_`yr' = r(mean) / 12
-
+    
     di "Year `yr': AROP = " %5.2f `arop_rate_`yr'' "%, IWP = " %5.2f `iwp_rate_`yr'' "%"
 }
 
-***************************************
-* Calculate statistics by year - BY HOUSEHOLD TYPE
-***************************************
-
-di _n "=== Calculating statistics BY HOUSEHOLD TYPE ===" _n
-
-* Define household types (now with detailed breakdown)
-local hh_types "1 2 3 4 11 12 13 14 21 22 23 24 5 6 99"
-local hh_labels `" "1A0C" "1A1C" "1A2C" "1A3C" "1F0C" "1F1C" "1F2C" "1F3C" "1M0C" "1M1C" "1M2C" "1M3C" "2A0C" "2A2C" "Other" "'
-
-local ht_idx = 1
-foreach ht of local hh_types {
-    local ht_label : word `ht_idx' of `hh_labels'
-    di _n "Household type `ht' (`ht_label'):"
-
-    * Determine which variable to use: hh_type_overall for 1-4, hh_type for others
-    if inlist(`ht', 1, 2, 3, 4) {
-        local hh_var "hh_type_overall"
-    }
-    else {
-        local hh_var "hh_type"
-    }
-
-    foreach yr of local years {
-
-        quietly count if year == `yr' & `hh_var' == `ht'
-        if r(N) == 0 {
-            local arop_rate_`ht_label'_`yr' = .
-            local n_total_`ht_label'_`yr' = .
-            local n_arop_`ht_label'_`yr' = .
-            local arop_gap_abs_`ht_label'_`yr' = .
-            local arop_gap_abs_month_`ht_label'_`yr' = .
-            local arop_gap_rel_`ht_label'_`yr' = .
-            local iwp_rate_`ht_label'_`yr' = .
-            local n_workers_`ht_label'_`yr' = .
-            local n_iwp_`ht_label'_`yr' = .
-            local iwp_gap_abs_`ht_label'_`yr' = .
-            local iwp_gap_abs_month_`ht_label'_`yr' = .
-            local iwp_gap_rel_`ht_label'_`yr' = .
-            local months_`ht_label'_`yr' = .
-            local mean_inc_`ht_label'_`yr' = .
-            local mean_inc_month_`ht_label'_`yr' = .
-            local pov_line_hh_`ht_label'_`yr' = .
-            local pov_line_hh_month_`ht_label'_`yr' = .
-            continue
-        }
-
-        * OVERALL POVERTY (AROP) for this household type
-        sum arop [aw=`wt_var'] if year == `yr' & `hh_var' == `ht'
-        local arop_rate_`ht_label'_`yr' = r(mean) * 100
-
-        sum `wt_var' if year == `yr' & `hh_var' == `ht'
-        local n_total_`ht_label'_`yr' = r(sum)
-
-        gen temp_arop_`ht'_`yr' = arop * `wt_var' if year == `yr' & `hh_var' == `ht'
-        sum temp_arop_`ht'_`yr'
-        local n_arop_`ht_label'_`yr' = r(sum)
-        drop temp_arop_`ht'_`yr'
-
-        quietly count if year == `yr' & `hh_var' == `ht' & arop == 1
-        if r(N) > 0 {
-            sum arop_gap_abs [aw=`wt_var'] if year == `yr' & `hh_var' == `ht' & arop == 1
-            local arop_gap_abs_`ht_label'_`yr' = r(mean)
-            local arop_gap_abs_month_`ht_label'_`yr' = r(mean) / 12
-
-            sum arop_gap_rel [aw=`wt_var'] if year == `yr' & `hh_var' == `ht' & arop == 1
-            local arop_gap_rel_`ht_label'_`yr' = r(mean)
-        }
-        else {
-            local arop_gap_abs_`ht_label'_`yr' = .
-            local arop_gap_abs_month_`ht_label'_`yr' = .
-            local arop_gap_rel_`ht_label'_`yr' = .
-        }
-
-        * IN-WORK POVERTY (IWP) for this household type
-        quietly count if year == `yr' & `hh_var' == `ht' & worker == 1
-        if r(N) > 0 {
-            sum inwork_poor [aw=`wt_var'] if year == `yr' & `hh_var' == `ht' & worker == 1
-            local iwp_rate_`ht_label'_`yr' = r(mean) * 100
-
-            sum `wt_var' if year == `yr' & `hh_var' == `ht' & worker == 1
-            local n_workers_`ht_label'_`yr' = r(sum)
-
-            gen temp_iwp_`ht'_`yr' = inwork_poor * `wt_var' if year == `yr' & `hh_var' == `ht' & worker == 1
-            sum temp_iwp_`ht'_`yr'
-            local n_iwp_`ht_label'_`yr' = r(sum)
-            drop temp_iwp_`ht'_`yr'
-
-            quietly count if year == `yr' & `hh_var' == `ht' & inwork_poor == 1
-            if r(N) > 0 {
-                sum iwp_gap_abs [aw=`wt_var'] if year == `yr' & `hh_var' == `ht' & inwork_poor == 1
-                local iwp_gap_abs_`ht_label'_`yr' = r(mean)
-                local iwp_gap_abs_month_`ht_label'_`yr' = r(mean) / 12
-
-                sum iwp_gap_rel [aw=`wt_var'] if year == `yr' & `hh_var' == `ht' & inwork_poor == 1
-                local iwp_gap_rel_`ht_label'_`yr' = r(mean)
-            }
-            else {
-                local iwp_gap_abs_`ht_label'_`yr' = .
-                local iwp_gap_abs_month_`ht_label'_`yr' = .
-                local iwp_gap_rel_`ht_label'_`yr' = .
-            }
-
-            sum months_worked [aw=`wt_var'] if year == `yr' & `hh_var' == `ht' & worker == 1
-            local months_`ht_label'_`yr' = r(mean)
-        }
-        else {
-            local iwp_rate_`ht_label'_`yr' = .
-            local n_workers_`ht_label'_`yr' = .
-            local n_iwp_`ht_label'_`yr' = .
-            local iwp_gap_abs_`ht_label'_`yr' = .
-            local iwp_gap_abs_month_`ht_label'_`yr' = .
-            local iwp_gap_rel_`ht_label'_`yr' = .
-            local months_`ht_label'_`yr' = .
-        }
-
-        * Mean income for this household type
-        sum eq_hh_ils_dispy [aw=`wt_var'] if year == `yr' & `hh_var' == `ht'
-        local mean_inc_`ht_label'_`yr' = r(mean)
-        local mean_inc_month_`ht_label'_`yr' = r(mean) / 12
-
-        * Household-specific poverty threshold for this household type
-        sum pov_threshold_hh [aw=`wt_var'] if year == `yr' & `hh_var' == `ht'
-        local pov_line_hh_`ht_label'_`yr' = r(mean)
-        local pov_line_hh_month_`ht_label'_`yr' = r(mean) / 12
-    }
-
-    local ht_idx = `ht_idx' + 1
-}
-
 *===============================================================================
-* CREATE FORMATTED OUTPUT - OVERALL
+* CREATE FORMATTED OUTPUT
 *===============================================================================
 
-di _n "=== Creating Excel output - OVERALL ===" _n
+di _n "=== Creating Excel output ===" _n
 
 clear
 set obs 35
@@ -840,202 +441,16 @@ foreach yr of local years {
 
 capture mkdir "$output"
 
-* Save OVERALL sheet
-export excel "$output/ALL_POV_IND_SILC_ORGIN.xlsx", replace sheet("Overall") firstrow(variables)
-
-*===============================================================================
-* CREATE FORMATTED OUTPUT - BY HOUSEHOLD TYPE
-*===============================================================================
-
-di _n "=== Creating Excel output BY HOUSEHOLD TYPE ===" _n
-
-* Define household types and labels (with detailed breakdown)
-local hh_types "1 2 3 4 11 12 13 14 21 22 23 24 5 6 99"
-local hh_labels `" "1A0C" "1A1C" "1A2C" "1A3C" "1F0C" "1F1C" "1F2C" "1F3C" "1M0C" "1M1C" "1M2C" "1M3C" "2A0C" "2A2C" "Other" "'
-local hh_names `" "1Adult_0Ch" "1Adult_1Ch" "1Adult_2Ch" "1Adult_3Ch" "1Female_0Ch" "1Female_1Ch" "1Female_2Ch" "1Female_3Ch" "1Male_0Ch" "1Male_1Ch" "1Male_2Ch" "1Male_3Ch" "2Adults_0Ch" "2Adults_2Ch" "Other_OECD" "'
-
-local ht_idx = 1
-foreach ht of local hh_types {
-    local ht_label : word `ht_idx' of `hh_labels'
-    local ht_name : word `ht_idx' of `hh_names'
-
-    di "Creating sheet for household type: `ht_label'"
-
-    clear
-    set obs 35
-
-    gen str50 Variable = ""
-    foreach yr of local years {
-        gen Value_`yr' = .
-    }
-
-    local row = 1
-
-    * HEADER
-    replace Variable = "=== HOUSEHOLD TYPE: `ht_label' ===" in `row'
-    local row = `row' + 1
-
-    replace Variable = "" in `row'
-    local row = `row' + 1
-
-    * OVERALL POVERTY SECTION
-    replace Variable = "=== OVERALL POVERTY (AROP) ===" in `row'
-    local row = `row' + 1
-
-    replace Variable = "AROP rate (%)" in `row'
-    foreach yr of local years {
-        replace Value_`yr' = `arop_rate_`ht_label'_`yr'' in `row'
-    }
-    local row = `row' + 1
-
-    replace Variable = "Total population" in `row'
-    foreach yr of local years {
-        replace Value_`yr' = `n_total_`ht_label'_`yr'' in `row'
-    }
-    local row = `row' + 1
-
-    replace Variable = "Number poor" in `row'
-    foreach yr of local years {
-        replace Value_`yr' = `n_arop_`ht_label'_`yr'' in `row'
-    }
-    local row = `row' + 1
-
-    replace Variable = "Avg poverty gap (Euro, annual)" in `row'
-    foreach yr of local years {
-        replace Value_`yr' = `arop_gap_abs_`ht_label'_`yr'' in `row'
-    }
-    local row = `row' + 1
-
-    replace Variable = "Avg poverty gap (Euro, monthly)" in `row'
-    foreach yr of local years {
-        replace Value_`yr' = `arop_gap_abs_month_`ht_label'_`yr'' in `row'
-    }
-    local row = `row' + 1
-
-    replace Variable = "Avg poverty gap (Percent)" in `row'
-    foreach yr of local years {
-        replace Value_`yr' = `arop_gap_rel_`ht_label'_`yr'' in `row'
-    }
-    local row = `row' + 1
-
-    replace Variable = "" in `row'
-    local row = `row' + 1
-
-    * IN-WORK POVERTY SECTION
-    replace Variable = "=== IN-WORK POVERTY (IWP) ===" in `row'
-    local row = `row' + 1
-
-    replace Variable = "IWP rate (%)" in `row'
-    foreach yr of local years {
-        replace Value_`yr' = `iwp_rate_`ht_label'_`yr'' in `row'
-    }
-    local row = `row' + 1
-
-    replace Variable = "Number workers" in `row'
-    foreach yr of local years {
-        replace Value_`yr' = `n_workers_`ht_label'_`yr'' in `row'
-    }
-    local row = `row' + 1
-
-    replace Variable = "Number IWP" in `row'
-    foreach yr of local years {
-        replace Value_`yr' = `n_iwp_`ht_label'_`yr'' in `row'
-    }
-    local row = `row' + 1
-
-    replace Variable = "Avg months worked" in `row'
-    foreach yr of local years {
-        replace Value_`yr' = `months_`ht_label'_`yr'' in `row'
-    }
-    local row = `row' + 1
-
-    replace Variable = "Avg IWP gap (Euro, annual)" in `row'
-    foreach yr of local years {
-        replace Value_`yr' = `iwp_gap_abs_`ht_label'_`yr'' in `row'
-    }
-    local row = `row' + 1
-
-    replace Variable = "Avg IWP gap (Euro, monthly)" in `row'
-    foreach yr of local years {
-        replace Value_`yr' = `iwp_gap_abs_month_`ht_label'_`yr'' in `row'
-    }
-    local row = `row' + 1
-
-    replace Variable = "Avg IWP gap (Percent)" in `row'
-    foreach yr of local years {
-        replace Value_`yr' = `iwp_gap_rel_`ht_label'_`yr'' in `row'
-    }
-    local row = `row' + 1
-
-    replace Variable = "" in `row'
-    local row = `row' + 1
-
-    * INCOME AND POVERTY THRESHOLD SECTION
-    replace Variable = "=== INCOME INDICATORS ===" in `row'
-    local row = `row' + 1
-
-    replace Variable = "Poverty threshold for this HH type (Euro, annual)" in `row'
-    foreach yr of local years {
-        replace Value_`yr' = `pov_line_hh_`ht_label'_`yr'' in `row'
-    }
-    local row = `row' + 1
-
-    replace Variable = "Poverty threshold for this HH type (Euro, monthly)" in `row'
-    foreach yr of local years {
-        replace Value_`yr' = `pov_line_hh_month_`ht_label'_`yr'' in `row'
-    }
-    local row = `row' + 1
-
-    replace Variable = "Mean equiv. income (Euro, annual)" in `row'
-    foreach yr of local years {
-        replace Value_`yr' = `mean_inc_`ht_label'_`yr'' in `row'
-    }
-    local row = `row' + 1
-
-    replace Variable = "Mean equiv. income (Euro, monthly)" in `row'
-    foreach yr of local years {
-        replace Value_`yr' = `mean_inc_month_`ht_label'_`yr'' in `row'
-    }
-    local row = `row' + 1
-
-    keep if Variable != ""
-
-    * Format all numeric variables
-    foreach yr of local years {
-        format Value_`yr' %15.2f
-    }
-
-    * Append to Excel file with separate sheet for each household type
-    export excel "$output/ALL_POV_IND_SILC_ORGIN.xlsx", sheet("`ht_name'") sheetmodify firstrow(variables)
-
-    local ht_idx = `ht_idx' + 1
-}
+export excel "$output/ALL_POV_IND_SILC_ORGIN.xlsx", replace sheet("Combined_Poverty") firstrow(variables)
 
 di as result "File saved successfully!"
 
 di _n "==============================================================================="
 di "COMBINED POVERTY ANALYSIS COMPLETE - EU-SILC 2015-2023"
 di "==============================================================================="
-di "Method: Custom equivalence factors by household type"
-di "  - 1 adult, 0 children: factor 1.0"
-di "  - 1 adult, 1+ children: factor 1.3+ (OECD for 2+ children)"
-di "  - 2 adults, 0 children: factor 1.5"
-di "  - 2 adults, 2 children: factor 2.1"
-di "  - Other households: OECD scale"
-di "Income source: HY020 (household disposable income)"
-di "Gender breakdown: Single-adult households separated by male/female"
-di "==============================================================================="
 di "Output files:"
-di "  - ALL_POV_IND_SILC_ORGIN.dta (microdata with AROP + IWP)"
-di "  - ALL_POV_IND_SILC_ORGIN.xlsx with 16 sheets:"
-di "      * Overall - Overall statistics across all households"
-di "      * 1Adult_0Ch to 1Adult_3Ch - Single adult households (0,1,2,3+ children)"
-di "      * 1Female_0Ch to 1Female_3Ch - Single female households (0,1,2,3+ children)"
-di "      * 1Male_0Ch to 1Male_3Ch - Single male households (0,1,2,3+ children)"
-di "      * 2Adults_0Ch - Couple without children"
-di "      * 2Adults_2Ch - Couple with two children"
-di "      * Other_OECD - Other household types (using OECD scale)"
-di "  Each sheet includes household-type SPECIFIC poverty threshold (adjusted for household size)"
+di "  - poverty_combined_microdata_SILC_AllYears.dta (microdata with AROP + IWP)"
+di "  - poverty_combined_analysis_SILC_AllYears.xlsx (summary statistics)"
 di "==============================================================================="
 
 list Variable Value_*, clean noobs
