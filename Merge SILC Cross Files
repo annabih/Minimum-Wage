@@ -1,15 +1,15 @@
 *******************************************************************************************************************************************************************************************
 *** Titel: Merge EU-SILC Cross-sectional data for Austria 2015-2023
-*** Date: 19.12.2024
+*** Date: 16.01.2024
 *** Aim: Merge R, D, H, P files for each year and append all years
 *******************************************************************************************************************************************************************************************
 clear all
 set more off
 
-global input "C:\Users\ALochbih\OneDrive - Bundesarbeitskammer\Desktop\EUROMOD\InWorkPoverty\Data\AT_CROSS"
-global output "C:\Users\ALochbih\OneDrive - Bundesarbeitskammer\Desktop\EUROMOD\InWorkPoverty\Robustness"
+global input "D:\Data\AT_CROSS"
+global output "D:\Data\AT_CROSS"
 
-local years "2015 2016 2017 2018 2019 2020 2021 2022 2023"
+local years "2015 2016 2017 2018 2019 2020 2021 2022 2023 2024"
 
 * Loop through each year and merge files
 local first_year = 1
@@ -77,7 +77,7 @@ foreach yr of local years {
 use `alldata', clear
 
 * Save final combined dataset
-save "$output/SILC_CrossSec_AllYears_2015_2023.dta", replace
+save "$output/SILC_CrossSec_AllYears_2015_2024.dta", replace
 
 di _n "==============================================================================="
 di "COMPLETE!"
