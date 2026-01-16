@@ -227,7 +227,7 @@ if "`gender_var'" != "" {
     gen gender_single_adult = .
     replace gender_single_adult = `gender_var' if n_adults == 1 & is_adult == 1
     bysort year `hh_id_var': egen hh_adult_gender = max(gender_single_adult)
-    label variable hh_adult_gender "Gender of adult in single-adult household (1=male, 2=female)"
+    label variable hh_adult_gender "Gender of adult in single-adult household (1=female, 2=male)"
 }
 else {
     gen hh_adult_gender = .
@@ -263,13 +263,13 @@ label variable eq_factor "Equivalence factor (custom by household type)"
 * Generate household type variable for documentation (with gender breakdown for singles)
 gen byte hh_type = .
 
-* Single adult households by gender
-replace hh_type = 1 if n_adults == 1 & n_children == 0 & hh_adult_gender == 1  // male
-replace hh_type = 2 if n_adults == 1 & n_children == 0 & hh_adult_gender == 2  // female
+* Single adult households by gender (1=female, 2=male in SILC)
+replace hh_type = 1 if n_adults == 1 & n_children == 0 & hh_adult_gender == 1  // female
+replace hh_type = 2 if n_adults == 1 & n_children == 0 & hh_adult_gender == 2  // male
 
-* Single adult with children by gender
-replace hh_type = 3 if n_adults == 1 & n_children >= 1 & hh_adult_gender == 1  // male with child(ren)
-replace hh_type = 4 if n_adults == 1 & n_children >= 1 & hh_adult_gender == 2  // female with child(ren)
+* Single adult with children by gender (1=female, 2=male in SILC)
+replace hh_type = 3 if n_adults == 1 & n_children >= 1 & hh_adult_gender == 1  // female with child(ren)
+replace hh_type = 4 if n_adults == 1 & n_children >= 1 & hh_adult_gender == 2  // male with child(ren)
 
 * Two adults (no gender breakdown)
 replace hh_type = 5 if n_adults == 2 & n_children == 0
@@ -278,10 +278,10 @@ replace hh_type = 6 if n_adults == 2 & n_children == 2
 * Other household types
 replace hh_type = 99 if missing(hh_type)
 
-label define hh_type_lbl 1 "1 adult male, 0 children (factor 1.0)" ///
-                         2 "1 adult female, 0 children (factor 1.0)" ///
-                         3 "1 adult male, 1+ children (factor 1.3+)" ///
-                         4 "1 adult female, 1+ children (factor 1.3+)" ///
+label define hh_type_lbl 1 "1 adult female, 0 children (factor 1.0)" ///
+                         2 "1 adult male, 0 children (factor 1.0)" ///
+                         3 "1 adult female, 1+ children (factor 1.3+)" ///
+                         4 "1 adult male, 1+ children (factor 1.3+)" ///
                          5 "2 adults, 0 children (factor 1.5)" ///
                          6 "2 adults, 2 children (factor 2.1)" ///
                          99 "Other (OECD scale)"
@@ -480,7 +480,7 @@ di _n "=== Calculating statistics BY HOUSEHOLD TYPE ===" _n
 
 * Define household types (now with gender breakdown for singles)
 local hh_types "1 2 3 4 5 6 99"
-local hh_labels `" "1M0C" "1F0C" "1MC" "1FC" "2A0C" "2A2C" "Other" "'
+local hh_labels `" "1F0C" "1M0C" "1FC" "1MC" "2A0C" "2A2C" "Other" "'
 
 local ht_idx = 1
 foreach ht of local hh_types {
@@ -755,8 +755,8 @@ di _n "=== Creating Excel output BY HOUSEHOLD TYPE ===" _n
 
 * Define household types and labels (with gender breakdown for singles)
 local hh_types "1 2 3 4 5 6 99"
-local hh_labels `" "1M0C" "1F0C" "1MC" "1FC" "2A0C" "2A2C" "Other" "'
-local hh_names `" "1Male_0Children" "1Female_0Children" "1Male_Children" "1Female_Children" "2Adults_0Children" "2Adults_2Children" "Other_OECD" "'
+local hh_labels `" "1F0C" "1M0C" "1FC" "1MC" "2A0C" "2A2C" "Other" "'
+local hh_names `" "1Female_0Children" "1Male_0Children" "1Female_Children" "1Male_Children" "2Adults_0Children" "2Adults_2Children" "Other_OECD" "'
 
 local ht_idx = 1
 foreach ht of local hh_types {
@@ -933,10 +933,10 @@ di "Output files:"
 di "  - ALL_POV_IND_SILC_ORGIN.dta (microdata with AROP + IWP)"
 di "  - ALL_POV_IND_SILC_ORGIN.xlsx with 8 sheets:"
 di "      * Overall - Overall statistics across all households"
-di "      * 1Male_0Children - Single male, no children"
 di "      * 1Female_0Children - Single female, no children"
-di "      * 1Male_Children - Single male with child(ren)"
+di "      * 1Male_0Children - Single male, no children"
 di "      * 1Female_Children - Single female with child(ren)"
+di "      * 1Male_Children - Single male with child(ren)"
 di "      * 2Adults_0Children - Couple without children"
 di "      * 2Adults_2Children - Couple with two children"
 di "      * Other_OECD - Other household types (using OECD scale)"
