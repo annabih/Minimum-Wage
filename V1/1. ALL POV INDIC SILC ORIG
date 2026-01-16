@@ -14,8 +14,8 @@
 clear all
 set more off
 
-use "C:\Users\ALochbih\OneDrive - Bundesarbeitskammer\Desktop\EUROMOD\InWorkPoverty\Robustness\SILC_CrossSec_AllYears_2015_2023.dta"
-global output "C:\Users\ALochbih\OneDrive - Bundesarbeitskammer\Desktop\EUROMOD\InWorkPoverty\Ergebnisse"
+use "D:\Data\AT_CROSS\SILC_CrossSec_AllYears_2015_2024.dta"
+global output "D:\InWorkPoverty_SILC"
 
 local years "2015 2016 2017 2018 2019 2020 2021 2022 2023"
 
