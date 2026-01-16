@@ -1,8 +1,8 @@
 *******************************************************************************************************************************************************************************************
 *** Titel: Merge EU-SILC Cross-sectional data for Austria 2015-2023
-*** Date: 16.01.2026 (Updated - keeps original SILC variable names)
+*** Date: 16.01.2026 (Updated - uses standard SILC variable names)
 *** Aim: Merge R, D, H, P files for each year and append all years
-*** Note: Original SILC variable names are preserved (PB030, RB030, HB030, DB030, PX030, RX030, etc.)
+*** Note: All files standardized to PB030 (person ID) and PX030 (household ID) for merging
 *******************************************************************************************************************************************************************************************
 clear all
 set more off
@@ -22,42 +22,38 @@ foreach yr of local years {
     * Create short year (15, 16, 17, ...)
     local yr_short = substr("`yr'", 3, 2)
 
-    * H-Datei (Household) - keeps HB030 as household ID
+    * H-Datei (Household)
     import delimited "$input/`yr'/UDB_cAT`yr_short'H.csv", delimiter(",") clear case(preserve)
+    rename HB030 PX030  // use PX030 as standard household ID
     tempfile household
     save `household'
 
-    * D-Datei (Household) - keeps DB030 as household ID
+    * D-Datei (Household)
     import delimited "$input/`yr'/UDB_cAT`yr_short'D.csv", delimiter(",") clear case(preserve)
+    rename DB030 PX030  // use PX030 as standard household ID
     tempfile demographic_hh
     save `demographic_hh'
 
-    * R-Datei (Personal) - keeps RB030 as person ID, RX030 as household ID
+    * R-Datei (Personal)
     import delimited "$input/`yr'/UDB_cAT`yr_short'R.csv", delimiter(",") clear case(preserve)
+    rename RB030 PB030  // use PB030 as standard person ID
+    rename RX030 PX030  // use PX030 as standard household ID
     tempfile register
     save `register'
 
-    * P-Datei (Personal) - Master - keeps PB030 as person ID, PX030 as household ID
+    * P-Datei (Personal) - Master (already has PB030 and PX030)
     import delimited "$input/`yr'/UDB_cAT`yr_short'P.csv", delimiter(",") clear case(preserve)
 
-    * Merge personal files (P + R) on person ID
-    * P has PB030, R has RB030 (both are person IDs)
-    rename PB030 person_id
-    merge 1:1 person_id using `register', rename(RB030=person_id)
-    rename person_id PB030  // restore PB030
+    * Merge personal files (P + R) on PB030
+    merge 1:1 PB030 using `register'
     drop _merge
 
-    * Now we have PX030 (household ID from P) and RX030 (household ID from R)
-    * Merge household H-file: P has PX030, H has HB030
-    rename PX030 hh_merge_id
-    merge m:1 hh_merge_id using `household', rename(HB030=hh_merge_id)
-    rename hh_merge_id PX030  // restore PX030
+    * Merge household H-file on PX030
+    merge m:1 PX030 using `household'
     drop _merge
 
-    * Merge household D-file: P has PX030, D has DB030
-    rename PX030 hh_merge_id
-    merge m:1 hh_merge_id using `demographic_hh', rename(DB030=hh_merge_id)
-    rename hh_merge_id PX030  // restore PX030
+    * Merge household D-file on PX030
+    merge m:1 PX030 using `demographic_hh'
     drop _merge
 
     * Add year
