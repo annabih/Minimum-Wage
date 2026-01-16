@@ -1131,568 +1131,191 @@ list Variable Value_*, clean noobs
 di _n "==============================================================================="
 
 *===============================================================================
-* CALCULATE STATISTICS WITH CUSTOM FACTORS
+* WITHIN-GROUP ANALYSIS BY HOUSEHOLD CONSTELLATION
 *===============================================================================
 
-di _n "=== Now calculating statistics with CUSTOM FACTORS ===" _n
+di _n "=== Creating within-group analysis by household constellation ===" _n
 
-***************************************
-* Calculate statistics by year - OVERALL (CUSTOM)
-***************************************
+* Create household constellation variable (6 specific types)
+gen byte hh_constellation = .
+replace hh_constellation = 1 if n_adults == 1 & n_children == 0  // 1 Erwachsener
+replace hh_constellation = 2 if n_adults == 1 & n_children == 1  // 1 Erwachsener + 1 Kind
+replace hh_constellation = 3 if n_adults == 2 & n_children == 0  // 2 Erwachsene
+replace hh_constellation = 4 if n_adults == 2 & n_children == 1  // 2 Erwachsene + 1 Kind
+replace hh_constellation = 5 if n_adults == 2 & n_children == 2  // 2 Erwachsene + 2 Kinder
+replace hh_constellation = 6 if n_adults == 2 & n_children == 3  // 2 Erwachsene + 3 Kinder
 
-di _n "=== Calculating OVERALL statistics by year (CUSTOM FACTORS) ===" _n
+label define hh_const_lbl 1 "1 adult, 0 children" 2 "1 adult, 1 child" 3 "2 adults, 0 children" 4 "2 adults, 1 child" 5 "2 adults, 2 children" 6 "2 adults, 3 children"
+label values hh_constellation hh_const_lbl
+label variable hh_constellation "Household constellation (6 specific types)"
 
-foreach yr of local years {
+* Check distribution
+di _n "Distribution of household constellations:"
+tab hh_constellation if !missing(hh_constellation), mi
 
-    quietly count if year == `yr'
-    if r(N) == 0 continue
+* For each constellation, calculate within-group median and threshold
+foreach const in 1 2 3 4 5 6 {
+    gen median_within_const`const' = .
+    gen threshold_within_const`const' = .
+    gen arop_within_const`const' = .
 
-    * OVERALL POVERTY (AROP) - CUSTOM
-    sum arop_custom [aw=`wt_var'] if year == `yr'
-    local arop_rate_custom_`yr' = r(mean) * 100
+    foreach yr of local years {
+        quietly count if year==`yr' & hh_constellation==`const'
+        if r(N)==0 continue
 
-    sum `wt_var' if year == `yr'
-    local n_total_custom_`yr' = r(sum)
+        * Calculate within-group median for this constellation
+        quietly _pctile eq_hh_ils_dispy_official [pw=`wt_var'] if year==`yr' & hh_constellation==`const', p(50)
+        local median_val = r(r1)
+        local threshold_val = 0.60 * `median_val'
 
-    gen temp_arop_custom_`yr' = arop_custom * `wt_var' if year == `yr'
-    sum temp_arop_custom_`yr'
-    local n_arop_custom_`yr' = r(sum)
-    drop temp_arop_custom_`yr'
+        * Store median and threshold
+        quietly replace median_within_const`const' = `median_val' if year==`yr' & hh_constellation==`const'
+        quietly replace threshold_within_const`const' = `threshold_val' if year==`yr' & hh_constellation==`const'
 
-    quietly count if year == `yr' & arop_custom == 1
+        * Calculate AROP within this group (relative to group's own threshold)
+        quietly replace arop_within_const`const' = (eq_hh_ils_dispy_official < `threshold_val') if year==`yr' & hh_constellation==`const'
+
+        di "Year `yr', Constellation `const': Median = " %9.0f `median_val' ", Threshold = " %9.0f `threshold_val'
+    }
+
+    label variable median_within_const`const' "Within-group median for constellation `const'"
+    label variable threshold_within_const`const' "Within-group threshold (60% median) for constellation `const'"
+    label variable arop_within_const`const' "AROP relative to within-group threshold for constellation `const'"
+}
+
+*===============================================================================
+* EXPORT WITHIN-GROUP RESULTS TO EXCEL
+*===============================================================================
+
+di _n "=== Exporting within-group results to Excel ===" _n
+
+* Create Excel file for within-group analysis
+local excel_file "$output/SILC_WITHINGROUP_BY_CONSTELLATION.xlsx"
+
+* Export results for each constellation
+foreach const in 1 2 3 4 5 6 {
+
+    * Get constellation label
+    local const_label : label hh_const_lbl `const'
+
+    di _n "Processing constellation `const': `const_label'" _n
+
+    * Create temporary frame for this constellation's results
+    preserve
+
+    * Keep only observations from this constellation
+    keep if hh_constellation == `const'
+
+    if _N == 0 {
+        di "  No observations for constellation `const', skipping..."
+        restore
+        continue
+    }
+
+    * Collapse by year to get statistics
+    collapse (mean) arop_rate_within=arop_within_const`const' ///
+                    median_within=median_within_const`const' ///
+                    threshold_within=threshold_within_const`const' ///
+             (rawsum) n_total=`wt_var' ///
+             (count) n_obs=year, ///
+             by(year)
+
+    * Calculate additional statistics
+    gen arop_rate_pct = arop_rate_within * 100
+    gen threshold_monthly = threshold_within / 12
+
+    * Format variables
+    format arop_rate_pct %9.2f
+    format median_within threshold_within %12.0fc
+    format threshold_monthly %12.2fc
+    format n_total %15.0fc
+
+    * Reorder variables
+    order year n_obs n_total median_within threshold_within threshold_monthly arop_rate_within arop_rate_pct
+
+    * Label variables
+    label variable year "Year"
+    label variable n_obs "N observations"
+    label variable n_total "N weighted"
+    label variable median_within "Within-group median (annual)"
+    label variable threshold_within "Within-group threshold (annual, 60% median)"
+    label variable threshold_monthly "Within-group threshold (monthly)"
+    label variable arop_rate_within "AROP rate (within group)"
+    label variable arop_rate_pct "AROP rate (%, within group)"
+
+    * Export to Excel with constellation-specific sheet name
+    local sheet_name = "Const_" + string(`const')
+
+    quietly count
     if r(N) > 0 {
-        sum arop_gap_abs_custom [aw=`wt_var'] if year == `yr' & arop_custom == 1
-        local arop_gap_abs_custom_`yr' = r(mean)
-        local arop_gap_abs_month_custom_`yr' = r(mean) / 12
-
-        sum arop_gap_rel_custom [aw=`wt_var'] if year == `yr' & arop_custom == 1
-        local arop_gap_rel_custom_`yr' = r(mean)
+        export excel using "`excel_file'", sheet("`sheet_name'", replace) firstrow(varlabels) keepcellfmt
+        di "  Exported `r(N)' years to sheet `sheet_name'"
     }
     else {
-        local arop_gap_abs_custom_`yr' = .
-        local arop_gap_abs_month_custom_`yr' = .
-        local arop_gap_rel_custom_`yr' = .
+        di "  No data to export for constellation `const'"
     }
 
-    * IN-WORK POVERTY (IWP) - CUSTOM
-    quietly count if year == `yr' & worker == 1
-    if r(N) > 0 {
-        sum inwork_poor_custom [aw=`wt_var'] if year == `yr' & worker == 1
-        local iwp_rate_custom_`yr' = r(mean) * 100
-
-        sum `wt_var' if year == `yr' & worker == 1
-        local n_workers_custom_`yr' = r(sum)
-
-        gen temp_iwp_custom_`yr' = inwork_poor_custom * `wt_var' if year == `yr' & worker == 1
-        sum temp_iwp_custom_`yr'
-        local n_iwp_custom_`yr' = r(sum)
-        drop temp_iwp_custom_`yr'
-
-        quietly count if year == `yr' & inwork_poor_custom == 1
-        if r(N) > 0 {
-            sum iwp_gap_abs_custom [aw=`wt_var'] if year == `yr' & inwork_poor_custom == 1
-            local iwp_gap_abs_custom_`yr' = r(mean)
-            local iwp_gap_abs_month_custom_`yr' = r(mean) / 12
-
-            sum iwp_gap_rel_custom [aw=`wt_var'] if year == `yr' & inwork_poor_custom == 1
-            local iwp_gap_rel_custom_`yr' = r(mean)
-        }
-        else {
-            local iwp_gap_abs_custom_`yr' = .
-            local iwp_gap_abs_month_custom_`yr' = .
-            local iwp_gap_rel_custom_`yr' = .
-        }
-
-        sum months_worked [aw=`wt_var'] if year == `yr' & worker == 1
-        local months_custom_`yr' = r(mean)
-    }
-    else {
-        local iwp_rate_custom_`yr' = .
-        local n_workers_custom_`yr' = .
-        local n_iwp_custom_`yr' = .
-        local iwp_gap_abs_custom_`yr' = .
-        local iwp_gap_abs_month_custom_`yr' = .
-        local iwp_gap_rel_custom_`yr' = .
-        local months_custom_`yr' = .
-    }
-
-    * SHARED VARIABLES - CUSTOM
-    sum pov_threshold_60_custom if year == `yr', meanonly
-    local pov_line_custom_`yr' = r(mean)
-    local pov_line_month_custom_`yr' = r(mean) / 12
-
-    sum median_eq_custom if year == `yr', meanonly
-    local median_inc_custom_`yr' = r(mean)
-    local median_inc_month_custom_`yr' = r(mean) / 12
-
-    sum eq_hh_ils_dispy [aw=`wt_var'] if year == `yr'
-    local mean_inc_custom_`yr' = r(mean)
-    local mean_inc_month_custom_`yr' = r(mean) / 12
-
-    di "Year `yr': AROP (custom) = " %5.2f `arop_rate_custom_`yr'' "%, IWP (custom) = " %5.2f `iwp_rate_custom_`yr'' "%"
+    restore
 }
 
-***************************************
-* Calculate statistics by year - BY HOUSEHOLD TYPE (CUSTOM)
-***************************************
+* Create summary sheet with all constellations side-by-side
+preserve
 
-di _n "=== Calculating statistics BY HOUSEHOLD TYPE (CUSTOM FACTORS) ===" _n
+* Keep only non-missing constellations
+keep if !missing(hh_constellation)
 
-local hh_types "1 2 3 4 11 12 13 14 21 22 23 24 5 6 99"
-local hh_labels `" "1A0C" "1A1C" "1A2C" "1A3C" "1F0C" "1F1C" "1F2C" "1F3C" "1M0C" "1M1C" "1M2C" "1M3C" "2A0C" "2A2C" "Other" "'
+if _N > 0 {
+    * For each constellation, get the appropriate within-group variables
+    gen arop_rate = .
+    gen median_val = .
+    gen threshold_val = .
 
-local ht_idx = 1
-foreach ht of local hh_types {
-    local ht_label : word `ht_idx' of `hh_labels'
-    di _n "Household type `ht' (`ht_label') - CUSTOM:"
-
-    * Determine which variable to use
-    if inlist(`ht', 1, 2, 3, 4) {
-        local hh_var "hh_type_overall"
-    }
-    else {
-        local hh_var "hh_type"
+    foreach const in 1 2 3 4 5 6 {
+        quietly replace arop_rate = arop_within_const`const' if hh_constellation == `const'
+        quietly replace median_val = median_within_const`const' if hh_constellation == `const'
+        quietly replace threshold_val = threshold_within_const`const' if hh_constellation == `const'
     }
 
-    foreach yr of local years {
+    * Collapse by year and constellation
+    collapse (mean) arop_rate median_val threshold_val ///
+             (rawsum) n_total=`wt_var', ///
+             by(year hh_constellation)
 
-        quietly count if year == `yr' & `hh_var' == `ht'
-        if r(N) == 0 {
-            local arop_rate_custom_`ht_label'_`yr' = .
-            local n_total_custom_`ht_label'_`yr' = .
-            local n_arop_custom_`ht_label'_`yr' = .
-            local arop_gap_abs_custom_`ht_label'_`yr' = .
-            local arop_gap_abs_month_custom_`ht_label'_`yr' = .
-            local arop_gap_rel_custom_`ht_label'_`yr' = .
-            local iwp_rate_custom_`ht_label'_`yr' = .
-            local n_workers_custom_`ht_label'_`yr' = .
-            local n_iwp_custom_`ht_label'_`yr' = .
-            local iwp_gap_abs_custom_`ht_label'_`yr' = .
-            local iwp_gap_abs_month_custom_`ht_label'_`yr' = .
-            local iwp_gap_rel_custom_`ht_label'_`yr' = .
-            local months_custom_`ht_label'_`yr' = .
-            local mean_inc_custom_`ht_label'_`yr' = .
-            local mean_inc_month_custom_`ht_label'_`yr' = .
-            local pov_line_hh_custom_`ht_label'_`yr' = .
-            local pov_line_hh_month_custom_`ht_label'_`yr' = .
-            continue
-        }
+    * Get constellation label
+    decode hh_constellation, gen(constellation_label)
 
-        * OVERALL POVERTY (AROP) for this household type - CUSTOM
-        sum arop_custom [aw=`wt_var'] if year == `yr' & `hh_var' == `ht'
-        local arop_rate_custom_`ht_label'_`yr' = r(mean) * 100
+    * Calculate additional metrics
+    gen arop_rate_pct = arop_rate * 100
+    gen threshold_monthly = threshold_val / 12
 
-        sum `wt_var' if year == `yr' & `hh_var' == `ht'
-        local n_total_custom_`ht_label'_`yr' = r(sum)
+    * Format
+    format arop_rate_pct %9.2f
+    format median_val threshold_val %12.0fc
+    format threshold_monthly %12.2fc
+    format n_total %15.0fc
 
-        gen temp_arop_custom_`ht'_`yr' = arop_custom * `wt_var' if year == `yr' & `hh_var' == `ht'
-        sum temp_arop_custom_`ht'_`yr'
-        local n_arop_custom_`ht_label'_`yr' = r(sum)
-        drop temp_arop_custom_`ht'_`yr'
+    * Sort
+    sort year hh_constellation
 
-        quietly count if year == `yr' & `hh_var' == `ht' & arop_custom == 1
-        if r(N) > 0 {
-            sum arop_gap_abs_custom [aw=`wt_var'] if year == `yr' & `hh_var' == `ht' & arop_custom == 1
-            local arop_gap_abs_custom_`ht_label'_`yr' = r(mean)
-            local arop_gap_abs_month_custom_`ht_label'_`yr' = r(mean) / 12
+    * Label variables
+    label variable year "Year"
+    label variable hh_constellation "Constellation"
+    label variable constellation_label "Household type"
+    label variable n_total "N weighted"
+    label variable median_val "Within-group median (annual)"
+    label variable threshold_val "Within-group threshold (annual, 60%)"
+    label variable threshold_monthly "Within-group threshold (monthly)"
+    label variable arop_rate "AROP rate (within group)"
+    label variable arop_rate_pct "AROP rate (%, within group)"
 
-            sum arop_gap_rel_custom [aw=`wt_var'] if year == `yr' & `hh_var' == `ht' & arop_custom == 1
-            local arop_gap_rel_custom_`ht_label'_`yr' = r(mean)
-        }
-        else {
-            local arop_gap_abs_custom_`ht_label'_`yr' = .
-            local arop_gap_abs_month_custom_`ht_label'_`yr' = .
-            local arop_gap_rel_custom_`ht_label'_`yr' = .
-        }
-
-        * IN-WORK POVERTY (IWP) for this household type - CUSTOM
-        quietly count if year == `yr' & `hh_var' == `ht' & worker == 1
-        if r(N) > 0 {
-            sum inwork_poor_custom [aw=`wt_var'] if year == `yr' & `hh_var' == `ht' & worker == 1
-            local iwp_rate_custom_`ht_label'_`yr' = r(mean) * 100
-
-            sum `wt_var' if year == `yr' & `hh_var' == `ht' & worker == 1
-            local n_workers_custom_`ht_label'_`yr' = r(sum)
-
-            gen temp_iwp_custom_`ht'_`yr' = inwork_poor_custom * `wt_var' if year == `yr' & `hh_var' == `ht' & worker == 1
-            sum temp_iwp_custom_`ht'_`yr'
-            local n_iwp_custom_`ht_label'_`yr' = r(sum)
-            drop temp_iwp_custom_`ht'_`yr'
-
-            quietly count if year == `yr' & `hh_var' == `ht' & inwork_poor_custom == 1
-            if r(N) > 0 {
-                sum iwp_gap_abs_custom [aw=`wt_var'] if year == `yr' & `hh_var' == `ht' & inwork_poor_custom == 1
-                local iwp_gap_abs_custom_`ht_label'_`yr' = r(mean)
-                local iwp_gap_abs_month_custom_`ht_label'_`yr' = r(mean) / 12
-
-                sum iwp_gap_rel_custom [aw=`wt_var'] if year == `yr' & `hh_var' == `ht' & inwork_poor_custom == 1
-                local iwp_gap_rel_custom_`ht_label'_`yr' = r(mean)
-            }
-            else {
-                local iwp_gap_abs_custom_`ht_label'_`yr' = .
-                local iwp_gap_abs_month_custom_`ht_label'_`yr' = .
-                local iwp_gap_rel_custom_`ht_label'_`yr' = .
-            }
-
-            sum months_worked [aw=`wt_var'] if year == `yr' & `hh_var' == `ht' & worker == 1
-            local months_custom_`ht_label'_`yr' = r(mean)
-        }
-        else {
-            local iwp_rate_custom_`ht_label'_`yr' = .
-            local n_workers_custom_`ht_label'_`yr' = .
-            local n_iwp_custom_`ht_label'_`yr' = .
-            local iwp_gap_abs_custom_`ht_label'_`yr' = .
-            local iwp_gap_abs_month_custom_`ht_label'_`yr' = .
-            local iwp_gap_rel_custom_`ht_label'_`yr' = .
-            local months_custom_`ht_label'_`yr' = .
-        }
-
-        * Mean income for this household type
-        sum eq_hh_ils_dispy [aw=`wt_var'] if year == `yr' & `hh_var' == `ht'
-        local mean_inc_custom_`ht_label'_`yr' = r(mean)
-        local mean_inc_month_custom_`ht_label'_`yr' = r(mean) / 12
-
-        * Household-specific poverty threshold for this household type - CUSTOM
-        sum pov_threshold_hh_custom [aw=`wt_var'] if year == `yr' & `hh_var' == `ht'
-        local pov_line_hh_custom_`ht_label'_`yr' = r(mean)
-        local pov_line_hh_month_custom_`ht_label'_`yr' = r(mean) / 12
-    }
-
-    local ht_idx = `ht_idx' + 1
+    * Export summary
+    export excel using "`excel_file'", sheet("Summary", replace) firstrow(varlabels) keepcellfmt
+    di _n "Exported summary sheet with all constellations"
 }
 
-*===============================================================================
-* CREATE FORMATTED OUTPUT - OVERALL (CUSTOM FACTORS)
-*===============================================================================
-
-di _n "=== Creating Excel output - OVERALL (CUSTOM FACTORS) ===" _n
-
-clear
-set obs 35
-
-gen str50 Variable = ""
-foreach yr of local years {
-    gen Value_`yr' = .
-}
-
-local row = 1
-
-* OVERALL POVERTY SECTION - CUSTOM
-replace Variable = "=== OVERALL POVERTY (AROP) - CUSTOM FACTORS ===" in `row'
-local row = `row' + 1
-
-replace Variable = "AROP rate (%)" in `row'
-foreach yr of local years {
-    replace Value_`yr' = `arop_rate_custom_`yr'' in `row'
-}
-local row = `row' + 1
-
-replace Variable = "Total population" in `row'
-foreach yr of local years {
-    replace Value_`yr' = `n_total_custom_`yr'' in `row'
-}
-local row = `row' + 1
-
-replace Variable = "Number poor" in `row'
-foreach yr of local years {
-    replace Value_`yr' = `n_arop_custom_`yr'' in `row'
-}
-local row = `row' + 1
-
-replace Variable = "Avg poverty gap (Euro, annual)" in `row'
-foreach yr of local years {
-    replace Value_`yr' = `arop_gap_abs_custom_`yr'' in `row'
-}
-local row = `row' + 1
-
-replace Variable = "Avg poverty gap (Euro, monthly)" in `row'
-foreach yr of local years {
-    replace Value_`yr' = `arop_gap_abs_month_custom_`yr'' in `row'
-}
-local row = `row' + 1
-
-replace Variable = "Avg poverty gap (Percent)" in `row'
-foreach yr of local years {
-    replace Value_`yr' = `arop_gap_rel_custom_`yr'' in `row'
-}
-local row = `row' + 1
-
-replace Variable = "" in `row'
-local row = `row' + 1
-
-* IN-WORK POVERTY SECTION - CUSTOM
-replace Variable = "=== IN-WORK POVERTY (IWP) - CUSTOM FACTORS ===" in `row'
-local row = `row' + 1
-
-replace Variable = "IWP rate (%)" in `row'
-foreach yr of local years {
-    replace Value_`yr' = `iwp_rate_custom_`yr'' in `row'
-}
-local row = `row' + 1
-
-replace Variable = "Number workers" in `row'
-foreach yr of local years {
-    replace Value_`yr' = `n_workers_custom_`yr'' in `row'
-}
-local row = `row' + 1
-
-replace Variable = "Number IWP" in `row'
-foreach yr of local years {
-    replace Value_`yr' = `n_iwp_custom_`yr'' in `row'
-}
-local row = `row' + 1
-
-replace Variable = "Avg months worked" in `row'
-foreach yr of local years {
-    replace Value_`yr' = `months_custom_`yr'' in `row'
-}
-local row = `row' + 1
-
-replace Variable = "Avg IWP gap (Euro, annual)" in `row'
-foreach yr of local years {
-    replace Value_`yr' = `iwp_gap_abs_custom_`yr'' in `row'
-}
-local row = `row' + 1
-
-replace Variable = "Avg IWP gap (Euro, monthly)" in `row'
-foreach yr of local years {
-    replace Value_`yr' = `iwp_gap_abs_month_custom_`yr'' in `row'
-}
-local row = `row' + 1
-
-replace Variable = "Avg IWP gap (Percent)" in `row'
-foreach yr of local years {
-    replace Value_`yr' = `iwp_gap_rel_custom_`yr'' in `row'
-}
-local row = `row' + 1
-
-replace Variable = "" in `row'
-local row = `row' + 1
-
-* SHARED SECTION - CUSTOM
-replace Variable = "=== SHARED INDICATORS - CUSTOM FACTORS ===" in `row'
-local row = `row' + 1
-
-replace Variable = "Poverty line (Euro, annual)" in `row'
-foreach yr of local years {
-    replace Value_`yr' = `pov_line_custom_`yr'' in `row'
-}
-local row = `row' + 1
-
-replace Variable = "Poverty line (Euro, monthly)" in `row'
-foreach yr of local years {
-    replace Value_`yr' = `pov_line_month_custom_`yr'' in `row'
-}
-local row = `row' + 1
-
-replace Variable = "Median equiv. income (Euro, annual)" in `row'
-foreach yr of local years {
-    replace Value_`yr' = `median_inc_custom_`yr'' in `row'
-}
-local row = `row' + 1
-
-replace Variable = "Median equiv. income (Euro, monthly)" in `row'
-foreach yr of local years {
-    replace Value_`yr' = `median_inc_month_custom_`yr'' in `row'
-}
-local row = `row' + 1
-
-replace Variable = "Mean equiv. income (Euro, annual)" in `row'
-foreach yr of local years {
-    replace Value_`yr' = `mean_inc_custom_`yr'' in `row'
-}
-local row = `row' + 1
-
-replace Variable = "Mean equiv. income (Euro, monthly)" in `row'
-foreach yr of local years {
-    replace Value_`yr' = `mean_inc_month_custom_`yr'' in `row'
-}
-local row = `row' + 1
-
-keep if Variable != ""
-
-* Format all numeric variables
-foreach yr of local years {
-    format Value_`yr' %15.2f
-}
-
-* Save OVERALL sheet with custom factors
-export excel "$output/ALL_POV_IND_SILC_ORGIN_CUSTOM.xlsx", replace sheet("Overall_Custom") firstrow(variables)
-
-*===============================================================================
-* CREATE FORMATTED OUTPUT - BY HOUSEHOLD TYPE (CUSTOM FACTORS)
-*===============================================================================
-
-di _n "=== Creating Excel output BY HOUSEHOLD TYPE (CUSTOM FACTORS) ===" _n
-
-local hh_types "1 2 3 4 11 12 13 14 21 22 23 24 5 6 99"
-local hh_labels `" "1A0C" "1A1C" "1A2C" "1A3C" "1F0C" "1F1C" "1F2C" "1F3C" "1M0C" "1M1C" "1M2C" "1M3C" "2A0C" "2A2C" "Other" "'
-local hh_names `" "1Adult_0Ch" "1Adult_1Ch" "1Adult_2Ch" "1Adult_3Ch" "1Female_0Ch" "1Female_1Ch" "1Female_2Ch" "1Female_3Ch" "1Male_0Ch" "1Male_1Ch" "1Male_2Ch" "1Male_3Ch" "2Adults_0Ch" "2Adults_2Ch" "Other_OECD" "'
-
-local ht_idx = 1
-foreach ht of local hh_types {
-    local ht_label : word `ht_idx' of `hh_labels'
-    local ht_name : word `ht_idx' of `hh_names'
-
-    di "Creating sheet for household type: `ht_label' (CUSTOM)"
-
-    clear
-    set obs 35
-
-    gen str50 Variable = ""
-    foreach yr of local years {
-        gen Value_`yr' = .
-    }
-
-    local row = 1
-
-    * HEADER
-    replace Variable = "=== HOUSEHOLD TYPE: `ht_label' (CUSTOM FACTORS) ===" in `row'
-    local row = `row' + 1
-
-    replace Variable = "" in `row'
-    local row = `row' + 1
-
-    * OVERALL POVERTY SECTION - CUSTOM
-    replace Variable = "=== OVERALL POVERTY (AROP) - CUSTOM ===" in `row'
-    local row = `row' + 1
-
-    replace Variable = "AROP rate (%)" in `row'
-    foreach yr of local years {
-        replace Value_`yr' = `arop_rate_custom_`ht_label'_`yr'' in `row'
-    }
-    local row = `row' + 1
-
-    replace Variable = "Total population" in `row'
-    foreach yr of local years {
-        replace Value_`yr' = `n_total_custom_`ht_label'_`yr'' in `row'
-    }
-    local row = `row' + 1
-
-    replace Variable = "Number poor" in `row'
-    foreach yr of local years {
-        replace Value_`yr' = `n_arop_custom_`ht_label'_`yr'' in `row'
-    }
-    local row = `row' + 1
-
-    replace Variable = "Avg poverty gap (Euro, annual)" in `row'
-    foreach yr of local years {
-        replace Value_`yr' = `arop_gap_abs_custom_`ht_label'_`yr'' in `row'
-    }
-    local row = `row' + 1
-
-    replace Variable = "Avg poverty gap (Euro, monthly)" in `row'
-    foreach yr of local years {
-        replace Value_`yr' = `arop_gap_abs_month_custom_`ht_label'_`yr'' in `row'
-    }
-    local row = `row' + 1
-
-    replace Variable = "Avg poverty gap (Percent)" in `row'
-    foreach yr of local years {
-        replace Value_`yr' = `arop_gap_rel_custom_`ht_label'_`yr'' in `row'
-    }
-    local row = `row' + 1
-
-    replace Variable = "" in `row'
-    local row = `row' + 1
-
-    * IN-WORK POVERTY SECTION - CUSTOM
-    replace Variable = "=== IN-WORK POVERTY (IWP) - CUSTOM ===" in `row'
-    local row = `row' + 1
-
-    replace Variable = "IWP rate (%)" in `row'
-    foreach yr of local years {
-        replace Value_`yr' = `iwp_rate_custom_`ht_label'_`yr'' in `row'
-    }
-    local row = `row' + 1
-
-    replace Variable = "Number workers" in `row'
-    foreach yr of local years {
-        replace Value_`yr' = `n_workers_custom_`ht_label'_`yr'' in `row'
-    }
-    local row = `row' + 1
-
-    replace Variable = "Number IWP" in `row'
-    foreach yr of local years {
-        replace Value_`yr' = `n_iwp_custom_`ht_label'_`yr'' in `row'
-    }
-    local row = `row' + 1
-
-    replace Variable = "Avg months worked" in `row'
-    foreach yr of local years {
-        replace Value_`yr' = `months_custom_`ht_label'_`yr'' in `row'
-    }
-    local row = `row' + 1
-
-    replace Variable = "Avg IWP gap (Euro, annual)" in `row'
-    foreach yr of local years {
-        replace Value_`yr' = `iwp_gap_abs_custom_`ht_label'_`yr'' in `row'
-    }
-    local row = `row' + 1
-
-    replace Variable = "Avg IWP gap (Euro, monthly)" in `row'
-    foreach yr of local years {
-        replace Value_`yr' = `iwp_gap_abs_month_custom_`ht_label'_`yr'' in `row'
-    }
-    local row = `row' + 1
-
-    replace Variable = "Avg IWP gap (Percent)" in `row'
-    foreach yr of local years {
-        replace Value_`yr' = `iwp_gap_rel_custom_`ht_label'_`yr'' in `row'
-    }
-    local row = `row' + 1
-
-    replace Variable = "" in `row'
-    local row = `row' + 1
-
-    * INCOME AND POVERTY THRESHOLD SECTION - CUSTOM
-    replace Variable = "=== INCOME INDICATORS - CUSTOM ===" in `row'
-    local row = `row' + 1
-
-    replace Variable = "Poverty threshold for this HH type (Euro, annual)" in `row'
-    foreach yr of local years {
-        replace Value_`yr' = `pov_line_hh_custom_`ht_label'_`yr'' in `row'
-    }
-    local row = `row' + 1
-
-    replace Variable = "Poverty threshold for this HH type (Euro, monthly)" in `row'
-    foreach yr of local years {
-        replace Value_`yr' = `pov_line_hh_month_custom_`ht_label'_`yr'' in `row'
-    }
-    local row = `row' + 1
-
-    replace Variable = "Mean equiv. income (Euro, annual)" in `row'
-    foreach yr of local years {
-        replace Value_`yr' = `mean_inc_custom_`ht_label'_`yr'' in `row'
-    }
-    local row = `row' + 1
-
-    replace Variable = "Mean equiv. income (Euro, monthly)" in `row'
-    foreach yr of local years {
-        replace Value_`yr' = `mean_inc_month_custom_`ht_label'_`yr'' in `row'
-    }
-    local row = `row' + 1
-
-    keep if Variable != ""
-
-    * Format all numeric variables
-    foreach yr of local years {
-        format Value_`yr' %15.2f
-    }
-
-    * Append to Excel file with separate sheet for each household type
-    export excel "$output/ALL_POV_IND_SILC_ORGIN_CUSTOM.xlsx", sheet("`ht_name'_Custom") sheetmodify firstrow(variables)
-
-    local ht_idx = `ht_idx' + 1
-}
-
-di as result "Custom factors analysis file saved successfully!"
+restore
 
 di _n "==============================================================================="
-di "CUSTOM FACTORS ANALYSIS COMPLETE"
-di "==============================================================================="
-di "Output file: ALL_POV_IND_SILC_ORGIN_CUSTOM.xlsx"
-di "This file uses custom equivalence factors and household-specific thresholds"
-di "==============================================================================="
-
-di _n "==============================================================================="
+di "Within-group analysis complete! Results exported to:"
+di "`excel_file'"
+di "===============================================================================" _n
