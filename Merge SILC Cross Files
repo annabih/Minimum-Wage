@@ -1,7 +1,8 @@
 *******************************************************************************************************************************************************************************************
 *** Titel: Merge EU-SILC Cross-sectional data for Austria 2015-2023
-*** Date: 16.01.2024
+*** Date: 16.01.2026 (Updated - keeps original SILC variable names)
 *** Aim: Merge R, D, H, P files for each year and append all years
+*** Note: Original SILC variable names are preserved (PB030, RB030, HB030, DB030, PX030, RX030, etc.)
 *******************************************************************************************************************************************************************************************
 clear all
 set more off
@@ -15,52 +16,55 @@ local years "2015 2016 2017 2018 2019 2020 2021 2022 2023 2024"
 local first_year = 1
 
 foreach yr of local years {
-    
+
     di _n "=== Processing Year `yr' ===" _n
-    
+
     * Create short year (15, 16, 17, ...)
     local yr_short = substr("`yr'", 3, 2)
-    
-    * H-Datei (Household)
+
+    * H-Datei (Household) - keeps HB030 as household ID
     import delimited "$input/`yr'/UDB_cAT`yr_short'H.csv", delimiter(",") clear case(preserve)
-    rename HB030 household_id
     tempfile household
     save `household'
-    
-    * D-Datei (Household)
+
+    * D-Datei (Household) - keeps DB030 as household ID
     import delimited "$input/`yr'/UDB_cAT`yr_short'D.csv", delimiter(",") clear case(preserve)
-    rename DB030 household_id
     tempfile demographic_hh
     save `demographic_hh'
-    
-    * R-Datei (Personal)
+
+    * R-Datei (Personal) - keeps RB030 as person ID, RX030 as household ID
     import delimited "$input/`yr'/UDB_cAT`yr_short'R.csv", delimiter(",") clear case(preserve)
-    rename RB030 person_id
-    rename RX030 household_id
     tempfile register
     save `register'
-    
-    * P-Datei (Personal) - Master
+
+    * P-Datei (Personal) - Master - keeps PB030 as person ID, PX030 as household ID
     import delimited "$input/`yr'/UDB_cAT`yr_short'P.csv", delimiter(",") clear case(preserve)
+
+    * Merge personal files (P + R) on person ID
+    * P has PB030, R has RB030 (both are person IDs)
     rename PB030 person_id
-    rename PX030 household_id
-    
-    * Merge personal files
-    merge 1:1 person_id using `register'
+    merge 1:1 person_id using `register', rename(RB030=person_id)
+    rename person_id PB030  // restore PB030
     drop _merge
-    
-    * Merge household files
-    merge m:1 household_id using `household'
+
+    * Now we have PX030 (household ID from P) and RX030 (household ID from R)
+    * Merge household H-file: P has PX030, H has HB030
+    rename PX030 hh_merge_id
+    merge m:1 hh_merge_id using `household', rename(HB030=hh_merge_id)
+    rename hh_merge_id PX030  // restore PX030
     drop _merge
-    
-    merge m:1 household_id using `demographic_hh'
+
+    * Merge household D-file: P has PX030, D has DB030
+    rename PX030 hh_merge_id
+    merge m:1 hh_merge_id using `demographic_hh', rename(DB030=hh_merge_id)
+    rename hh_merge_id PX030  // restore PX030
     drop _merge
-    
+
     * Add year
     gen year = `yr'
-    
+
     di "Year `yr' merged: " _N " observations"
-    
+
     * Append to combined dataset
     if `first_year' == 1 {
         tempfile alldata

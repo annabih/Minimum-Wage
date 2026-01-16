@@ -1,6 +1,6 @@
 *******************************************************************************************************************************************************************************************
 *** Titel: Combined Poverty Analysis using merged EU-SILC Austria 2015-2023
-*** Date: 16.01.2026 (Updated)
+*** Date: 16.01.2026 (Updated - uses original SILC variable names)
 *** Aim: Overall poverty (AROP) and In-work poverty calculation with household-type specific equivalence factors
 *** Method: Uses HY020 (household income) with custom equivalence factors by household composition
 *** Equivalence factors:
@@ -10,6 +10,7 @@
 ***   - 2 adults, 2 children: 2.1
 ***   - Other household types: OECD scale (1.0 + (n_adults-1)*0.5 + n_children*0.3)
 *** Note: Poverty threshold is recalculated for each year
+*** Note: Uses original SILC variable names (PX030, PB030, RX010, RB050, etc.) - no renaming
 *******************************************************************************************************************************************************************************************
 clear all
 set more off
@@ -27,7 +28,7 @@ di _n "=== Original observations: " _N " ===" _n
 
 di _n "=== Destringing variables ===" _n
 
-local numeric_vars "HX090 HY020 HX040 DB040 RB050 PB040 RX010 PX010 PL073 PL074 PL075 PL076 year"
+local numeric_vars "HX090 HY020 HX040 DB030 HB030 PX030 RX030 RB050 PB040 RX010 PX010 PL073 PL074 PL075 PL076 year"
 
 foreach var of local numeric_vars {
     capture confirm variable `var'
@@ -54,25 +55,41 @@ foreach var of local numeric_vars {
 
 di _n "=== Preparing variables ===" _n
 
-* Personal weight
+* Check which weight variable exists (RB050 or PB040)
 capture confirm variable RB050
 if _rc == 0 {
-    gen dwt = RB050
+    local wt_var "RB050"
+    di "Using RB050 as weight variable"
 }
 else {
-    gen dwt = PB040
+    capture confirm variable PB040
+    if _rc == 0 {
+        local wt_var "PB040"
+        di "Using PB040 as weight variable"
+    }
+    else {
+        di as error "ERROR: No weight variable found (RB050 or PB040)!"
+        error 111
+    }
 }
-label variable dwt "Personal cross-sectional weight"
 
-* Age
+* Check which age variable exists (RX010 or PX010)
 capture confirm variable RX010
 if _rc == 0 {
-    gen age = RX010
+    local age_var "RX010"
+    di "Using RX010 as age variable"
 }
 else {
-    gen age = PX010
+    capture confirm variable PX010
+    if _rc == 0 {
+        local age_var "PX010"
+        di "Using PX010 as age variable"
+    }
+    else {
+        di as error "ERROR: No age variable found (RX010 or PX010)!"
+        error 111
+    }
 }
-label variable age "Age"
 
 * Months worked - ALL work (employee + self-employed)
 capture confirm variable PL073
@@ -121,39 +138,50 @@ label variable months_worked "Total months worked (employee + self-employed)"
 
 di _n "=== Preparing household income and composition ===" _n
 
-* Household disposable income (HY020)
+* Check household disposable income variable exists (HY020)
 capture confirm variable HY020
-if _rc == 0 {
-    gen hh_income = HY020
-    di "Using HY020 for household income"
-}
-else {
+if _rc != 0 {
     di as error "ERROR: HY020 (household income) not found!"
     error 111
 }
-label variable hh_income "Household disposable income (HY020)"
+di "Using HY020 for household income"
 
-* Get household ID variable (different naming in different SILC versions)
-capture confirm variable DB030
+* Identify household ID variable (different naming in different SILC versions)
+* Priority: PX030 (from P-file), then RX030 (from R-file), then HB030, DB030, or id_hh
+capture confirm variable PX030
 if _rc == 0 {
-    gen hh_id = DB030
-    di "Using DB030 for household ID"
+    local hh_id_var "PX030"
+    di "Using PX030 as household ID"
 }
 else {
-    capture confirm variable HB030
+    capture confirm variable RX030
     if _rc == 0 {
-        gen hh_id = HB030
-        di "Using HB030 for household ID"
+        local hh_id_var "RX030"
+        di "Using RX030 as household ID"
     }
     else {
-        capture confirm variable idhh
+        capture confirm variable HB030
         if _rc == 0 {
-            gen hh_id = idhh
-            di "Using idhh for household ID"
+            local hh_id_var "HB030"
+            di "Using HB030 as household ID"
         }
         else {
-            di as error "ERROR: No household ID variable found (DB030, HB030, or idhh)!"
-            error 111
+            capture confirm variable DB030
+            if _rc == 0 {
+                local hh_id_var "DB030"
+                di "Using DB030 as household ID"
+            }
+            else {
+                capture confirm variable id_hh
+                if _rc == 0 {
+                    local hh_id_var "id_hh"
+                    di "Using id_hh as household ID"
+                }
+                else {
+                    di as error "ERROR: No household ID variable found (PX030, RX030, HB030, DB030, or id_hh)!"
+                    error 111
+                }
+            }
         }
     }
 }
@@ -165,11 +193,11 @@ else {
 di _n "=== Calculating household composition ===" _n
 
 * Count adults and children per household (adult threshold = 18 years)
-gen is_adult = (age >= 18)
-gen is_child = (age < 18)
+gen is_adult = (`age_var' >= 18)
+gen is_child = (`age_var' < 18)
 
-bysort year hh_id: egen n_adults = total(is_adult)
-bysort year hh_id: egen n_children = total(is_child)
+bysort year `hh_id_var': egen n_adults = total(is_adult)
+bysort year `hh_id_var': egen n_children = total(is_child)
 
 label variable n_adults "Number of adults in household (age >= 18)"
 label variable n_children "Number of children in household (age < 18)"
@@ -219,18 +247,18 @@ label variable hh_type "Household type"
 
 * Show distribution of household types
 di _n "Distribution of household types:"
-tab hh_type [fw=dwt]
+tab hh_type [fw=`wt_var']
 
 ***********************************************
 * CALCULATE EQUIVALISED INCOME
 ***********************************************
 
 * Equivalised household income using custom factors
-gen eq_hh_ils_dispy = hh_income / eq_factor
+gen eq_hh_ils_dispy = HY020 / eq_factor
 label variable eq_hh_ils_dispy "Equivalised household income (custom factors)"
 
 * Drop missing values
-drop if missing(eq_hh_ils_dispy) | missing(dwt) | missing(age) | missing(hh_income)
+drop if missing(eq_hh_ils_dispy) | missing(`wt_var') | missing(`age_var') | missing(HY020)
 di _n "Observations after dropping missing: " _N _n
 
 ****************************************
@@ -244,7 +272,7 @@ postfile `h' int year double median_eq_hh_ils_dispy pov_threshold_60 using `thre
 foreach yr of local years {
     quietly count if year==`yr'
     if r(N)==0 continue
-    quietly _pctile eq_hh_ils_dispy [pw=dwt] if year==`yr', p(50)
+    quietly _pctile eq_hh_ils_dispy [pw=`wt_var'] if year==`yr', p(50)
     local median_val = r(r1)
     post `h' (`yr') (`median_val') (0.60*`median_val')
     di "Year `yr' Median=" %12.2f `median_val' " Threshold=" %12.2f (0.60*`median_val')
@@ -273,9 +301,9 @@ label variable arop_gap_rel "Poverty gap relative (%)"
 
 * Age groups
 gen age_group = .
-replace age_group = 1 if age < 18
-replace age_group = 2 if age >= 18 & age < 65
-replace age_group = 3 if age >= 65
+replace age_group = 1 if `age_var' < 18
+replace age_group = 2 if `age_var' >= 18 & `age_var' < 65
+replace age_group = 3 if `age_var' >= 65
 label define age_lbl 1 "Children (<18)" 2 "Working age (18-64)" 3 "Elderly (65+)"
 label values age_group age_lbl
 
@@ -283,7 +311,7 @@ label values age_group age_lbl
 * Identify workers and in-work poverty
 ****************************************
 
-gen worker = (months_worked > 6 & age >= 18 & age <= 64)
+gen worker = (months_worked > 6 & `age_var' >= 18 & `age_var' <= 64)
 label variable worker "Worker (>6 months, age 18-64)"
 
 gen inwork_poor = (worker == 1 & arop == 1)
@@ -317,24 +345,24 @@ foreach yr of local years {
     if r(N) == 0 continue
 
     * OVERALL POVERTY (AROP)
-    sum arop [aw=dwt] if year == `yr'
+    sum arop [aw=`wt_var'] if year == `yr'
     local arop_rate_`yr' = r(mean) * 100
 
-    sum dwt if year == `yr'
+    sum `wt_var' if year == `yr'
     local n_total_`yr' = r(sum)
 
-    gen temp_arop_`yr' = arop * dwt if year == `yr'
+    gen temp_arop_`yr' = arop * `wt_var' if year == `yr'
     sum temp_arop_`yr'
     local n_arop_`yr' = r(sum)
     drop temp_arop_`yr'
 
     quietly count if year == `yr' & arop == 1
     if r(N) > 0 {
-        sum arop_gap_abs [aw=dwt] if year == `yr' & arop == 1
+        sum arop_gap_abs [aw=`wt_var'] if year == `yr' & arop == 1
         local arop_gap_abs_`yr' = r(mean)
         local arop_gap_abs_month_`yr' = r(mean) / 12
 
-        sum arop_gap_rel [aw=dwt] if year == `yr' & arop == 1
+        sum arop_gap_rel [aw=`wt_var'] if year == `yr' & arop == 1
         local arop_gap_rel_`yr' = r(mean)
     }
     else {
@@ -346,24 +374,24 @@ foreach yr of local years {
     * IN-WORK POVERTY (IWP)
     quietly count if year == `yr' & worker == 1
     if r(N) > 0 {
-        sum inwork_poor [aw=dwt] if year == `yr' & worker == 1
+        sum inwork_poor [aw=`wt_var'] if year == `yr' & worker == 1
         local iwp_rate_`yr' = r(mean) * 100
 
-        sum dwt if year == `yr' & worker == 1
+        sum `wt_var' if year == `yr' & worker == 1
         local n_workers_`yr' = r(sum)
 
-        gen temp_iwp_`yr' = inwork_poor * dwt if year == `yr' & worker == 1
+        gen temp_iwp_`yr' = inwork_poor * `wt_var' if year == `yr' & worker == 1
         sum temp_iwp_`yr'
         local n_iwp_`yr' = r(sum)
         drop temp_iwp_`yr'
 
         quietly count if year == `yr' & inwork_poor == 1
         if r(N) > 0 {
-            sum iwp_gap_abs [aw=dwt] if year == `yr' & inwork_poor == 1
+            sum iwp_gap_abs [aw=`wt_var'] if year == `yr' & inwork_poor == 1
             local iwp_gap_abs_`yr' = r(mean)
             local iwp_gap_abs_month_`yr' = r(mean) / 12
 
-            sum iwp_gap_rel [aw=dwt] if year == `yr' & inwork_poor == 1
+            sum iwp_gap_rel [aw=`wt_var'] if year == `yr' & inwork_poor == 1
             local iwp_gap_rel_`yr' = r(mean)
         }
         else {
@@ -372,7 +400,7 @@ foreach yr of local years {
             local iwp_gap_rel_`yr' = .
         }
 
-        sum months_worked [aw=dwt] if year == `yr' & worker == 1
+        sum months_worked [aw=`wt_var'] if year == `yr' & worker == 1
         local months_`yr' = r(mean)
     }
     else {
@@ -394,7 +422,7 @@ foreach yr of local years {
     local median_inc_`yr' = r(mean)
     local median_inc_month_`yr' = r(mean) / 12
 
-    sum eq_hh_ils_dispy [aw=dwt] if year == `yr'
+    sum eq_hh_ils_dispy [aw=`wt_var'] if year == `yr'
     local mean_inc_`yr' = r(mean)
     local mean_inc_month_`yr' = r(mean) / 12
 
@@ -439,24 +467,24 @@ foreach ht of local hh_types {
         }
 
         * OVERALL POVERTY (AROP) for this household type
-        sum arop [aw=dwt] if year == `yr' & hh_type == `ht'
+        sum arop [aw=`wt_var'] if year == `yr' & hh_type == `ht'
         local arop_rate_`ht_label'_`yr' = r(mean) * 100
 
-        sum dwt if year == `yr' & hh_type == `ht'
+        sum `wt_var' if year == `yr' & hh_type == `ht'
         local n_total_`ht_label'_`yr' = r(sum)
 
-        gen temp_arop_`ht'_`yr' = arop * dwt if year == `yr' & hh_type == `ht'
+        gen temp_arop_`ht'_`yr' = arop * `wt_var' if year == `yr' & hh_type == `ht'
         sum temp_arop_`ht'_`yr'
         local n_arop_`ht_label'_`yr' = r(sum)
         drop temp_arop_`ht'_`yr'
 
         quietly count if year == `yr' & hh_type == `ht' & arop == 1
         if r(N) > 0 {
-            sum arop_gap_abs [aw=dwt] if year == `yr' & hh_type == `ht' & arop == 1
+            sum arop_gap_abs [aw=`wt_var'] if year == `yr' & hh_type == `ht' & arop == 1
             local arop_gap_abs_`ht_label'_`yr' = r(mean)
             local arop_gap_abs_month_`ht_label'_`yr' = r(mean) / 12
 
-            sum arop_gap_rel [aw=dwt] if year == `yr' & hh_type == `ht' & arop == 1
+            sum arop_gap_rel [aw=`wt_var'] if year == `yr' & hh_type == `ht' & arop == 1
             local arop_gap_rel_`ht_label'_`yr' = r(mean)
         }
         else {
@@ -468,24 +496,24 @@ foreach ht of local hh_types {
         * IN-WORK POVERTY (IWP) for this household type
         quietly count if year == `yr' & hh_type == `ht' & worker == 1
         if r(N) > 0 {
-            sum inwork_poor [aw=dwt] if year == `yr' & hh_type == `ht' & worker == 1
+            sum inwork_poor [aw=`wt_var'] if year == `yr' & hh_type == `ht' & worker == 1
             local iwp_rate_`ht_label'_`yr' = r(mean) * 100
 
-            sum dwt if year == `yr' & hh_type == `ht' & worker == 1
+            sum `wt_var' if year == `yr' & hh_type == `ht' & worker == 1
             local n_workers_`ht_label'_`yr' = r(sum)
 
-            gen temp_iwp_`ht'_`yr' = inwork_poor * dwt if year == `yr' & hh_type == `ht' & worker == 1
+            gen temp_iwp_`ht'_`yr' = inwork_poor * `wt_var' if year == `yr' & hh_type == `ht' & worker == 1
             sum temp_iwp_`ht'_`yr'
             local n_iwp_`ht_label'_`yr' = r(sum)
             drop temp_iwp_`ht'_`yr'
 
             quietly count if year == `yr' & hh_type == `ht' & inwork_poor == 1
             if r(N) > 0 {
-                sum iwp_gap_abs [aw=dwt] if year == `yr' & hh_type == `ht' & inwork_poor == 1
+                sum iwp_gap_abs [aw=`wt_var'] if year == `yr' & hh_type == `ht' & inwork_poor == 1
                 local iwp_gap_abs_`ht_label'_`yr' = r(mean)
                 local iwp_gap_abs_month_`ht_label'_`yr' = r(mean) / 12
 
-                sum iwp_gap_rel [aw=dwt] if year == `yr' & hh_type == `ht' & inwork_poor == 1
+                sum iwp_gap_rel [aw=`wt_var'] if year == `yr' & hh_type == `ht' & inwork_poor == 1
                 local iwp_gap_rel_`ht_label'_`yr' = r(mean)
             }
             else {
@@ -494,7 +522,7 @@ foreach ht of local hh_types {
                 local iwp_gap_rel_`ht_label'_`yr' = .
             }
 
-            sum months_worked [aw=dwt] if year == `yr' & hh_type == `ht' & worker == 1
+            sum months_worked [aw=`wt_var'] if year == `yr' & hh_type == `ht' & worker == 1
             local months_`ht_label'_`yr' = r(mean)
         }
         else {
@@ -508,7 +536,7 @@ foreach ht of local hh_types {
         }
 
         * Mean income for this household type
-        sum eq_hh_ils_dispy [aw=dwt] if year == `yr' & hh_type == `ht'
+        sum eq_hh_ils_dispy [aw=`wt_var'] if year == `yr' & hh_type == `ht'
         local mean_inc_`ht_label'_`yr' = r(mean)
         local mean_inc_month_`ht_label'_`yr' = r(mean) / 12
     }
