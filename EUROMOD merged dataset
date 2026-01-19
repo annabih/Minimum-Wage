@@ -1,6 +1,6 @@
 *******************************************************************************************************************************************************************************************
 *** Titel: Append all EUROMOD pre-processed input files (2015-2023)
-*** Date: 19.12.2024
+*** Date: 19.01.2026
 *** Aim: Create single dataset with all years
 *******************************************************************************************************************************************************************************************
 clear all
@@ -9,8 +9,8 @@ set more off
 *************************************************
 *** Create one full dataset
 *************************************************
-global input "C:\Users\ALochbih\OneDrive - Bundesarbeitskammer\Desktop\EUROMOD\InWorkPoverty\Data\Org_Input"
-global output "C:\Users\ALochbih\OneDrive - Bundesarbeitskammer\Desktop\EUROMOD\InWorkPoverty\Robustness"
+global input "D:\EUROMOD\InWorkPoverty\EUROMOD_RELEASES_J1.86+\Input"
+global output "D:\EUROMOD\InWorkPoverty\EUROMOD_RELEASES_J1.86+"
 
 * Import first file
 import delimited "$input/AT_2015_a3_2015_03_n2.txt", clear stringcols(_all)
