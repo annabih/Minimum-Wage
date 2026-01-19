@@ -10,24 +10,12 @@ set more off
 *** Create one full dataset
 *************************************************
 global input "D:\EUROMOD\InWorkPoverty\EUROMOD_RELEASES_J1.86+\Input"
-global output "D:\EUROMOD\InWorkPoverty\EUROMOD_RELEASES_J1.86+"
+global output "D:\EUROMOD\InWorkPoverty\EUROMOD_RELEASES_J1.86+\Output_V1"
 
 * Import first file
-import delimited "$input/AT_2015_a3_2015_03_n2.txt", clear stringcols(_all)
-gen year = 2015
-tempfile alldata
-save `alldata', replace
-
-* Append 2016
-import delimited "$input/AT_2016_a3.txt", clear stringcols(_all)
-gen year = 2016
-append using `alldata'
-save `alldata', replace
-
-* Append 2017
 import delimited "$input/AT_2017_a3.txt", clear stringcols(_all)
 gen year = 2017
-append using `alldata'
+tempfile alldata
 save `alldata', replace
 
 * Append 2018
@@ -60,13 +48,8 @@ gen year = 2022
 append using `alldata'
 save `alldata', replace
 
-* Append 2023
-import delimited "$input/AT_2023_b1_2015_03_n2.txt", clear stringcols(_all)
-gen year = 2023
-append using `alldata'
-
 * Save combined dataset
-save "$output/EUROMOD_AllYears_2015_2023.dta", replace
+save "$output/EUROMOD_Org_2017_2022.dta", replace
 
 di "Complete! Total observations: " _N
 tab year
