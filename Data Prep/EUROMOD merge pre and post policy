@@ -6,13 +6,13 @@
 clear all
 set more off
 
-global input "D:\EUROMOD\InWorkPoverty\EUROMOD_RELEASES_J1.86+"
+global input "D:\EUROMOD\InWorkPoverty\EUROMOD_RELEASES_J1.86+\Output_V1"
 global output "D:\EUROMOD\InWorkPoverty\EUROMOD_RELEASES_J1.86+\Output_V1"
 
 *************************************************
 *** Prepare Input Data (Original/Baseline)
 *************************************************
-use "$input/EUROMOD_AllYears_2015_2023.dta", clear
+use "$input\EUROMOD_Org_2017_2022.dta", clear
 
 * Destring key variables
 destring idhh idperson year, replace
