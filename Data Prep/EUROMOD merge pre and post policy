@@ -5,7 +5,6 @@
 *******************************************************************************************************************************************************************************************
 clear all
 set more off
-
 global input "D:\EUROMOD\InWorkPoverty\EUROMOD_RELEASES_J1.86+\Data_Prep"
 global output "D:\EUROMOD\InWorkPoverty\EUROMOD_RELEASES_J1.86+\Data_Prep"
 
@@ -13,6 +12,14 @@ global output "D:\EUROMOD\InWorkPoverty\EUROMOD_RELEASES_J1.86+\Data_Prep"
 *** Prepare Input Data (Original/Baseline)
 *************************************************
 use "$input\EUROMOD_Org_2017_2022_std.dta", clear
+
+* Kommas durch Punkte ersetzen für alle String-Variablen
+foreach var of varlist _all {
+    capture confirm string variable `var'
+    if !_rc {
+        replace `var' = subinstr(`var', ",", ".", .)
+    }
+}
 
 * Destring key variables
 destring idhh idperson year, replace
@@ -32,6 +39,14 @@ save `inputdata', replace
 *** Prepare Output Data (Policy/Reform)
 *************************************************
 use "$output/EUROMOD_V1_2017_2022.dta", clear
+
+* Kommas durch Punkte ersetzen für alle String-Variablen
+foreach var of varlist _all {
+    capture confirm string variable `var'
+    if !_rc {
+        replace `var' = subinstr(`var', ",", ".", .)
+    }
+}
 
 * Destring key variables
 destring idhh idperson year, replace
