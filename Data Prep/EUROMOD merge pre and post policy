@@ -12,7 +12,7 @@ global output "D:\EUROMOD\InWorkPoverty\EUROMOD_RELEASES_J1.86+\Data_Prep"
 *************************************************
 *** Prepare Input Data (Original/Baseline)
 *************************************************
-use "$input\EUROMOD_Org_2017_2022.dta", clear
+use "$input\EUROMOD_Org_2017_2022_std.dta", clear
 
 * Destring key variables
 destring idhh idperson year, replace
