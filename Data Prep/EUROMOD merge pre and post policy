@@ -1,13 +1,13 @@
 *******************************************************************************************************************************************************************************************
 *** Titel: Append EUROMOD Input and Output files with treatment indicator
-*** Date: 19.01.2026
+*** Date: 20.01.2026
 *** Aim: Create long dataset for DiD analysis
 *******************************************************************************************************************************************************************************************
 clear all
 set more off
 
-global input "D:\EUROMOD\InWorkPoverty\EUROMOD_RELEASES_J1.86+\Output_V1"
-global output "D:\EUROMOD\InWorkPoverty\EUROMOD_RELEASES_J1.86+\Output_V1"
+global input "D:\EUROMOD\InWorkPoverty\EUROMOD_RELEASES_J1.86+\Data_Prep"
+global output "D:\EUROMOD\InWorkPoverty\EUROMOD_RELEASES_J1.86+\Data_Prep"
 
 *************************************************
 *** Prepare Input Data (Original/Baseline)
