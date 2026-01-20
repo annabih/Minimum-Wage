@@ -13,43 +13,43 @@ global input "D:\EUROMOD\InWorkPoverty\EUROMOD_RELEASES_J1.86+\Output_Org"
 global output "D:\EUROMOD\InWorkPoverty\EUROMOD_RELEASES_J1.86+\Output_V1"
 
 * Import first file
-import delimited "$input/at_2017.txt", clear stringcols(_all)
+import delimited "$input/at_2017_std.txt", clear stringcols(_all)
 gen year = 2017
 tempfile alldata
 save `alldata', replace
 
 * Append 2018
-import delimited "$input/at_2018.txt", clear stringcols(_all)
+import delimited "$input/at_2018_std.txt", clear stringcols(_all)
 gen year = 2018
 append using `alldata'
 save `alldata', replace
 
 * Append 2019
-import delimited "$input/at_2019.txt", clear stringcols(_all)
+import delimited "$input/at_2019_std.txt", clear stringcols(_all)
 gen year = 2019
 append using `alldata'
 save `alldata', replace
 
 * Append 2020
-import delimited "$input/at_2020.txt", clear stringcols(_all)
+import delimited "$input/at_2020_std.txt", clear stringcols(_all)
 gen year = 2020
 append using `alldata'
 save `alldata', replace
 
 * Append 2021
-import delimited "$input/at_2021.txt", clear stringcols(_all)
+import delimited "$input/at_2021_std.txt", clear stringcols(_all)
 gen year = 2021
 append using `alldata'
 save `alldata', replace
 
 * Append 2022
-import delimited "$input/at_2022.txt", clear stringcols(_all)
+import delimited "$input/at_2022_std.txt", clear stringcols(_all)
 gen year = 2022
 append using `alldata'
 save `alldata', replace
 
 * Save combined dataset
-save "$output/EUROMOD_Org_2017_2022.dta", replace
+save "$output/EUROMOD_Org_2017_2022_std.dta", replace
 
 di "Complete! Total observations: " _N
 tab year
