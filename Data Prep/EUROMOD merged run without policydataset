@@ -10,7 +10,7 @@ set more off
 *** Create one full dataset
 *************************************************
 global input "D:\EUROMOD\InWorkPoverty\EUROMOD_RELEASES_J1.86+\Output_Org"
-global output "D:\EUROMOD\InWorkPoverty\EUROMOD_RELEASES_J1.86+\Output_V1"
+global output "D:\EUROMOD\InWorkPoverty\EUROMOD_RELEASES_J1.86+\Data_Prep"
 
 * Import first file
 import delimited "$input/at_2017_std.txt", clear stringcols(_all)
