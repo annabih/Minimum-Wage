@@ -6,41 +6,44 @@
 clear all
 set more off
 
-global input "D:\EUROMOD\InWorkPoverty\EUROMOD_RELEASES_J1.86+\Input"
+*************************************************
+*** Create one full dataset
+*************************************************
+global input "D:\EUROMOD\InWorkPoverty\EUROMOD_RELEASES_J1.86+\Output_Org"
 global output "D:\EUROMOD\InWorkPoverty\EUROMOD_RELEASES_J1.86+\Output_V1"
 
-* 2018 Input = 2017 Policy Jahr
-import delimited "$input/AT_2018_a1.txt", clear stringcols(_all)
+* Import first file
+import delimited "$input/at_2017.txt", clear stringcols(_all)
 gen year = 2017
 tempfile alldata
 save `alldata', replace
 
-* 2019 Input = 2018 Policy Jahr
-import delimited "$input/AT_2019_b2_2015_03_n2.txt", clear stringcols(_all)
+* Append 2018
+import delimited "$input/at_2018.txt", clear stringcols(_all)
 gen year = 2018
 append using `alldata'
 save `alldata', replace
 
-* 2020 Input = 2019 Policy Jahr
-import delimited "$input/AT_2020_b2_2015_03_n2.txt", clear stringcols(_all)
+* Append 2019
+import delimited "$input/at_2019.txt", clear stringcols(_all)
 gen year = 2019
 append using `alldata'
 save `alldata', replace
 
-* 2021 Input = 2020 Policy Jahr
-import delimited "$input/AT_2021_b1_2015_03_n2.txt", clear stringcols(_all)
+* Append 2020
+import delimited "$input/at_2020.txt", clear stringcols(_all)
 gen year = 2020
 append using `alldata'
 save `alldata', replace
 
-* 2022 Input = 2021 Policy Jahr
-import delimited "$input/AT_2022_b1_2015_03_n2.txt", clear stringcols(_all)
+* Append 2021
+import delimited "$input/at_2021.txt", clear stringcols(_all)
 gen year = 2021
 append using `alldata'
 save `alldata', replace
 
-* 2023 Input = 2022 Policy Jahr
-import delimited "$input/AT_2023_XXX.txt", clear stringcols(_all)
+* Append 2022
+import delimited "$input/at_2022.txt", clear stringcols(_all)
 gen year = 2022
 append using `alldata'
 save `alldata', replace
