@@ -767,9 +767,9 @@ foreach yr of local years {
 }
 local row = `row' + 1
 
-replace Variable = "Number People AROP (Post Transfer)" in `row'
+replace Variable = "Number People AROP (Pre Transfer)" in `row'
 foreach yr of local years {
-    replace Value_`yr' = `nar_`yr'' in `row'
+    replace Value_`yr' = `narpre_`yr'' in `row'
     format Value_`yr' %15.0f
 }
 local row = `row' + 1
