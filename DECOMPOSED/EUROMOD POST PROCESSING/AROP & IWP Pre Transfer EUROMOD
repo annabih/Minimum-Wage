@@ -1,0 +1,722 @@
+/*******************************************************************************************************************************************************************************************
+*** Title: Combined Poverty Analysis EUROMOD Austria 2017 2022
+*** Date: 22.01.2026
+*** Pre Transfer: ils_dispy - (ils_ben - ils_pen)
+*** Post Transfer: ils_dispy
+*** Comparison: Original (policy=0) vs Policy (policy=1)
+*** Output: Variable | 2017_O | 2017_P | 2017_ChPc | 2018_O | ...
+*** Included variables: same selection as SILC small output, plus post and change poverty gap monthly
+*** Unit convention in this do file: EUROMOD incomes are treated as MONTHLY
+*** Therefore: eq_hh_post and eq_hh_pre are monthly equivalised incomes
+*** Therefore: poverty threshold pov60_m is monthly equivalised, and pov60_a is annual equivalised
+*******************************************************************************************************************************************************************************************/
+
+clear all
+set more off
+
+use "D:\EUROMOD\InWorkPoverty\EUROMOD_RELEASES_J1.86+\Data_Prep\EUROMOD_Pre_Post_Policy_2017_2022.dta", clear
+global output "D:\InWorkPoverty_SILC"
+
+local years "2017 2018 2019 2020 2021 2022"
+
+di _n "=== Original observations: " _N " ===" _n
+
+*===============================================================================
+* DESTRING NUMERIC VARIABLES IF NEEDED
+*===============================================================================
+di _n "=== Destringing variables ===" _n
+
+local numeric_vars "dag dgn dwt liwmy ils_dispy ils_ben ils_pen idhh year policy"
+
+foreach var of local numeric_vars {
+    capture confirm variable `var'
+    if _rc == 0 {
+        capture confirm string variable `var'
+        if _rc == 0 {
+            replace `var' = subinstr(`var', ",", ".", .)
+            destring `var', replace force
+        }
+    }
+}
+
+*===============================================================================
+* VARIABLE PREPARATION
+*===============================================================================
+di _n "=== Preparing variables ===" _n
+
+gen double weight = dwt
+label variable weight "Personal weight"
+
+gen age = dag
+label variable age "Age"
+
+gen months_worked = liwmy
+replace months_worked = 0 if missing(months_worked)
+replace months_worked = 12 if months_worked > 12 & !missing(months_worked)
+label variable months_worked "Months worked"
+
+*===============================================================================
+* INCOME DEFINITIONS AT HOUSEHOLD LEVEL
+*===============================================================================
+di _n "=== Creating income variables ===" _n
+
+bysort year policy idhh: egen double hh_dispy = total(ils_dispy)
+bysort year policy idhh: egen double hh_ben   = total(ils_ben)
+bysort year policy idhh: egen double hh_pen   = total(ils_pen)
+
+gen double hh_pre_raw  = hh_dispy - (hh_ben - hh_pen)
+gen double hh_post_raw = hh_dispy
+
+drop if missing(hh_post_raw) | missing(weight) | missing(age)
+di _n "Observations after dropping missing: " _N _n
+
+*===============================================================================
+* HOUSEHOLD COMPOSITION AND EQUIVALENCE WEIGHTS
+*===============================================================================
+di _n "=== Creating household composition ===" _n
+
+bysort year policy idhh: egen n_adults   = total(age >= 14)
+bysort year policy idhh: egen n_children = total(age < 14)
+bysort year policy idhh: egen hh_size    = count(idhh)
+
+gen hh_type = .
+replace hh_type = 1  if n_adults == 1 & n_children == 0
+replace hh_type = 2  if n_adults == 1 & n_children == 1
+replace hh_type = 3  if n_adults == 1 & n_children >= 2
+replace hh_type = 4  if n_adults == 2 & n_children == 0
+replace hh_type = 5  if n_adults == 2 & n_children == 1
+replace hh_type = 6  if n_adults == 2 & n_children == 2
+replace hh_type = 7  if n_adults == 2 & n_children >= 3
+replace hh_type = 8  if n_adults >= 3 & n_children == 0
+replace hh_type = 9  if n_adults >= 3 & n_children >= 1
+replace hh_type = 10 if missing(hh_type)
+
+label define hh_type_lbl 1 "1 Erwachsener" 2 "1 Erwachsener + 1 Kind" 3 "1 Erwachsener + 2+ Kinder" 4 "2 Erwachsene" 5 "2 Erwachsene + 1 Kind" 6 "2 Erwachsene + 2 Kinder" 7 "2 Erwachsene + 3+ Kinder" 8 "3+ Erwachsene" 9 "3+ Erwachsene mit Kindern" 10 "Sonstige"
+label values hh_type hh_type_lbl
+
+gen double oecd_w = 1.0 + (n_adults - 1) * 0.5 + n_children * 0.3
+label variable oecd_w "OECD modified equivalence weight"
+
+*===============================================================================
+* EQUIVALISED INCOME
+*===============================================================================
+gen double eq_hh_post = hh_post_raw / oecd_w
+gen double eq_hh_pre  = hh_pre_raw  / oecd_w
+
+*===============================================================================
+* POVERTY THRESHOLD BASED ON POST TRANSFER MEDIAN
+* Units: monthly equivalised
+*===============================================================================
+di _n "=== Calculating poverty thresholds ===" _n
+
+tempfile thresholds
+tempname h
+postfile `h' int year int policy double med_post_m pov60_m using `thresholds', replace
+
+foreach yr of local years {
+    forvalues p = 0/1 {
+        quietly count if year == `yr' & policy == `p'
+        if r(N) == 0 continue
+
+        quietly _pctile eq_hh_post [pw=weight] if year == `yr' & policy == `p', p(50)
+        local medval_m = r(r1)
+
+        post `h' (`yr') (`p') (`medval_m') (0.60*`medval_m')
+    }
+}
+postclose `h'
+
+merge m:1 year policy using `thresholds', nogen
+
+replace pov60_m = round(pov60_m, 1)
+gen double pov60_a = round(pov60_m * 12, 1)
+
+gen double pov_hh_m = round(pov60_m * oecd_w, 1)
+gen double pov_hh_a = round(pov_hh_m * 12, 1)
+
+*===============================================================================
+* POVERTY AND IWP STATUS
+* Units: gaps in monthly and annual
+*===============================================================================
+di _n "=== Generating poverty status ===" _n
+
+gen byte arop     = (eq_hh_post < pov60_m) if !missing(pov60_m)
+gen byte arop_pre = (eq_hh_pre  < pov60_m) if !missing(pov60_m)
+
+gen double ar_gap_m    = pov60_m - eq_hh_post if arop == 1
+gen double arpre_gap_m = pov60_m - eq_hh_pre  if arop_pre == 1
+
+gen double ar_gap_a    = ar_gap_m    * 12
+gen double arpre_gap_a = arpre_gap_m * 12
+
+gen byte lifted = (arop_pre == 1 & arop == 0)
+
+gen worker = (months_worked > 6 & age >= 18 & age <= 64)
+
+gen inwork_poor     = (worker == 1 & arop == 1)
+gen inwork_poor_pre = (worker == 1 & arop_pre == 1)
+
+gen double iw_gap_m    = pov60_m - eq_hh_post if inwork_poor == 1
+gen double iwpre_gap_m = pov60_m - eq_hh_pre  if inwork_poor_pre == 1
+
+gen double iw_gap_a    = iw_gap_m    * 12
+gen double iwpre_gap_a = iwpre_gap_m * 12
+
+gen byte iwlifted = (inwork_poor_pre == 1 & inwork_poor == 0)
+
+capture mkdir "$output"
+save "$output\ALL_POV_IND_EUROMOD.dta", replace
+
+*===============================================================================
+* STATISTICS BY YEAR AND POLICY
+*===============================================================================
+di _n "=== Calculating statistics ===" _n
+
+foreach yr of local years {
+    forvalues p = 0/1 {
+
+        quietly count if year == `yr' & policy == `p'
+        if r(N) == 0 {
+            foreach v in nt arpre narpre arpre_ga arpre_gam argam ch_gap_m nwrk iwpre niwpre iwpre_ga iwpre_gam mon pl plm {
+                local `v'_`yr'_`p' = .
+            }
+            continue
+        }
+
+        * Total population
+        sum weight if year == `yr' & policy == `p'
+        local nt_`yr'_`p' = r(sum)
+
+        * AROP pre rate
+        sum arop_pre [aw=weight] if year == `yr' & policy == `p'
+        local arpre_`yr'_`p' = r(mean) * 100
+
+        gen double temp = arop_pre * weight if year == `yr' & policy == `p'
+        sum temp
+        local narpre_`yr'_`p' = r(sum)
+        drop temp
+
+        * Poverty gap pre annual and monthly
+        quietly count if year == `yr' & policy == `p' & arop_pre == 1
+        if r(N) > 0 {
+            sum arpre_gap_a [aw=weight] if year == `yr' & policy == `p' & arop_pre == 1
+            local arpre_ga_`yr'_`p' = r(mean)
+
+            sum arpre_gap_m [aw=weight] if year == `yr' & policy == `p' & arop_pre == 1
+            local arpre_gam_`yr'_`p' = r(mean)
+        }
+        else {
+            local arpre_ga_`yr'_`p'  = .
+            local arpre_gam_`yr'_`p' = .
+        }
+
+        * Poverty gap post monthly
+        quietly count if year == `yr' & policy == `p' & arop == 1
+        if r(N) > 0 {
+            sum ar_gap_m [aw=weight] if year == `yr' & policy == `p' & arop == 1
+            local argam_`yr'_`p' = r(mean)
+        }
+        else {
+            local argam_`yr'_`p' = .
+        }
+
+        * Workers
+        quietly count if year == `yr' & policy == `p' & worker == 1
+        if r(N) > 0 {
+            sum weight if year == `yr' & policy == `p' & worker == 1
+            local nwrk_`yr'_`p' = r(sum)
+
+            sum inwork_poor_pre [aw=weight] if year == `yr' & policy == `p' & worker == 1
+            local iwpre_`yr'_`p' = r(mean) * 100
+
+            gen double temp = inwork_poor_pre * weight if year == `yr' & policy == `p' & worker == 1
+            sum temp
+            local niwpre_`yr'_`p' = r(sum)
+            drop temp
+
+            quietly count if year == `yr' & policy == `p' & inwork_poor_pre == 1
+            if r(N) > 0 {
+                sum iwpre_gap_a [aw=weight] if year == `yr' & policy == `p' & inwork_poor_pre == 1
+                local iwpre_ga_`yr'_`p' = r(mean)
+
+                sum iwpre_gap_m [aw=weight] if year == `yr' & policy == `p' & inwork_poor_pre == 1
+                local iwpre_gam_`yr'_`p' = r(mean)
+            }
+            else {
+                local iwpre_ga_`yr'_`p'  = .
+                local iwpre_gam_`yr'_`p' = .
+            }
+
+            sum months_worked [aw=weight] if year == `yr' & policy == `p' & worker == 1
+            local mon_`yr'_`p' = r(mean)
+        }
+        else {
+            local nwrk_`yr'_`p'      = .
+            local iwpre_`yr'_`p'     = .
+            local niwpre_`yr'_`p'    = .
+            local iwpre_ga_`yr'_`p'  = .
+            local iwpre_gam_`yr'_`p' = .
+            local mon_`yr'_`p'       = .
+        }
+
+        * Poverty line annual and monthly for display
+        sum pov60_a if year == `yr' & policy == `p', meanonly
+        local pl_`yr'_`p' = r(mean)
+
+        sum pov60_m if year == `yr' & policy == `p', meanonly
+        local plm_`yr'_`p' = round(r(mean), 1)
+    }
+}
+
+*===============================================================================
+* HOUSEHOLD TYPE STATISTICS (only the needed variables)
+*===============================================================================
+di _n "=== Calculating HH type statistics ===" _n
+
+foreach yr of local years {
+    forvalues p = 0/1 {
+        quietly count if year == `yr' & policy == `p'
+        if r(N) == 0 continue
+
+        forvalues ht = 1/10 {
+
+            quietly count if year == `yr' & policy == `p' & hh_type == `ht'
+            if r(N) == 0 {
+                foreach v in ntt arpre narpre arpre_ga arpre_gam argam ch_gap_m nwrk iwpre niwpre iwpre_ga iwpre_gam mon pl plm {
+                    local `v'_hh`ht'_`yr'_`p' = .
+                }
+                continue
+            }
+
+            * Total population
+            sum weight if year == `yr' & policy == `p' & hh_type == `ht'
+            local ntt_hh`ht'_`yr'_`p' = r(sum)
+
+            * AROP pre rate and count
+            sum arop_pre [aw=weight] if year == `yr' & policy == `p' & hh_type == `ht'
+            local arpre_hh`ht'_`yr'_`p' = r(mean) * 100
+
+            gen double temp = arop_pre * weight if year == `yr' & policy == `p' & hh_type == `ht'
+            sum temp
+            local narpre_hh`ht'_`yr'_`p' = r(sum)
+            drop temp
+
+            * Poverty gap pre annual and monthly
+            quietly count if year == `yr' & policy == `p' & hh_type == `ht' & arop_pre == 1
+            if r(N) > 0 {
+                sum arpre_gap_a [aw=weight] if year == `yr' & policy == `p' & hh_type == `ht' & arop_pre == 1
+                local arpre_ga_hh`ht'_`yr'_`p' = r(mean)
+
+                sum arpre_gap_m [aw=weight] if year == `yr' & policy == `p' & hh_type == `ht' & arop_pre == 1
+                local arpre_gam_hh`ht'_`yr'_`p' = r(mean)
+            }
+            else {
+                local arpre_ga_hh`ht'_`yr'_`p'  = .
+                local arpre_gam_hh`ht'_`yr'_`p' = .
+            }
+
+            * Poverty gap post monthly
+            quietly count if year == `yr' & policy == `p' & hh_type == `ht' & arop == 1
+            if r(N) > 0 {
+                sum ar_gap_m [aw=weight] if year == `yr' & policy == `p' & hh_type == `ht' & arop == 1
+                local argam_hh`ht'_`yr'_`p' = r(mean)
+            }
+            else {
+                local argam_hh`ht'_`yr'_`p' = .
+            }
+
+                    * Workers and IWP pre
+            quietly count if year == `yr' & policy == `p' & hh_type == `ht' & worker == 1
+            if r(N) > 0 {
+                sum weight if year == `yr' & policy == `p' & hh_type == `ht' & worker == 1
+                local nwrk_hh`ht'_`yr'_`p' = r(sum)
+
+                sum inwork_poor_pre [aw=weight] if year == `yr' & policy == `p' & hh_type == `ht' & worker == 1
+                local iwpre_hh`ht'_`yr'_`p' = r(mean) * 100
+
+                gen double temp = inwork_poor_pre * weight if year == `yr' & policy == `p' & hh_type == `ht' & worker == 1
+                sum temp
+                local niwpre_hh`ht'_`yr'_`p' = r(sum)
+                drop temp
+
+                quietly count if year == `yr' & policy == `p' & hh_type == `ht' & inwork_poor_pre == 1
+                if r(N) > 0 {
+                    sum iwpre_gap_a [aw=weight] if year == `yr' & policy == `p' & hh_type == `ht' & inwork_poor_pre == 1
+                    local iwpre_ga_hh`ht'_`yr'_`p' = r(mean)
+
+                    sum iwpre_gap_m [aw=weight] if year == `yr' & policy == `p' & hh_type == `ht' & inwork_poor_pre == 1
+                    local iwpre_gam_hh`ht'_`yr'_`p' = r(mean)
+                }
+                else {
+                    local iwpre_ga_hh`ht'_`yr'_`p'  = .
+                    local iwpre_gam_hh`ht'_`yr'_`p' = .
+                }
+
+                sum months_worked [aw=weight] if year == `yr' & policy == `p' & hh_type == `ht' & worker == 1
+                local mon_hh`ht'_`yr'_`p' = r(mean)
+            }
+            else {
+                local nwrk_hh`ht'_`yr'_`p'      = .
+                local iwpre_hh`ht'_`yr'_`p'     = .
+                local niwpre_hh`ht'_`yr'_`p'    = .
+                local iwpre_ga_hh`ht'_`yr'_`p'  = .
+                local iwpre_gam_hh`ht'_`yr'_`p' = .
+                local mon_hh`ht'_`yr'_`p'       = .
+            }
+
+            * Poverty line annual and monthly for display
+            sum pov60_a if year == `yr' & policy == `p' & hh_type == `ht', meanonly
+            local pl_hh`ht'_`yr'_`p' = r(mean)
+
+            sum pov60_m if year == `yr' & policy == `p' & hh_type == `ht', meanonly
+            local plm_hh`ht'_`yr'_`p' = round(r(mean), 1)
+        }
+    }
+}
+
+*===============================================================================
+* CREATE EXCEL OUTPUT: O, P, Change in percent
+*===============================================================================
+di _n "=== Creating Excel output (O, P, Change percent) ===" _n
+
+preserve
+clear
+set obs 2000
+
+gen str140 Variable = ""
+foreach yr of local years {
+    gen double Value_`yr'_O    = .
+    gen double Value_`yr'_P    = .
+    gen double Value_`yr'_ChPc = .
+}
+
+local row = 1
+
+*-------------------------------------------------------------------------------
+* OVERVIEW
+*-------------------------------------------------------------------------------
+replace Variable = "=== OVERVIEW TOTAL POPULATION ===" in `row'
+local row = `row' + 2
+
+replace Variable = "Total population" in `row'
+foreach yr of local years {
+    replace Value_`yr'_O = `nt_`yr'_0' in `row'
+    replace Value_`yr'_P = `nt_`yr'_1' in `row'
+    if `nt_`yr'_0' != 0 & !missing(`nt_`yr'_0') {
+        replace Value_`yr'_ChPc = ((`nt_`yr'_1' - `nt_`yr'_0') / `nt_`yr'_0') * 100 in `row'
+    }
+}
+local row = `row' + 1
+
+replace Variable = "AROP Rate Pre Transfer (%)" in `row'
+foreach yr of local years {
+    replace Value_`yr'_O = `arpre_`yr'_0' in `row'
+    replace Value_`yr'_P = `arpre_`yr'_1' in `row'
+    if `arpre_`yr'_0' != 0 & !missing(`arpre_`yr'_0') {
+        replace Value_`yr'_ChPc = ((`arpre_`yr'_1' - `arpre_`yr'_0') / `arpre_`yr'_0') * 100 in `row'
+    }
+}
+local row = `row' + 1
+
+replace Variable = "Number People AROP (Pre Transfer)" in `row'
+foreach yr of local years {
+    replace Value_`yr'_O = `narpre_`yr'_0' in `row'
+    replace Value_`yr'_P = `narpre_`yr'_1' in `row'
+    if `narpre_`yr'_0' != 0 & !missing(`narpre_`yr'_0') {
+        replace Value_`yr'_ChPc = ((`narpre_`yr'_1' - `narpre_`yr'_0') / `narpre_`yr'_0') * 100 in `row'
+    }
+}
+local row = `row' + 1
+
+replace Variable = "Avg Poverty Gap Pre Annual (€)" in `row'
+foreach yr of local years {
+    replace Value_`yr'_O = `arpre_ga_`yr'_0' in `row'
+    replace Value_`yr'_P = `arpre_ga_`yr'_1' in `row'
+    if `arpre_ga_`yr'_0' != 0 & !missing(`arpre_ga_`yr'_0') {
+        replace Value_`yr'_ChPc = ((`arpre_ga_`yr'_1' - `arpre_ga_`yr'_0') / `arpre_ga_`yr'_0') * 100 in `row'
+    }
+}
+local row = `row' + 1
+
+replace Variable = "Avg Poverty Gap Pre Monthly (€)" in `row'
+foreach yr of local years {
+    replace Value_`yr'_O = `arpre_gam_`yr'_0' in `row'
+    replace Value_`yr'_P = `arpre_gam_`yr'_1' in `row'
+    if `arpre_gam_`yr'_0' != 0 & !missing(`arpre_gam_`yr'_0') {
+        replace Value_`yr'_ChPc = ((`arpre_gam_`yr'_1' - `arpre_gam_`yr'_0') / `arpre_gam_`yr'_0') * 100 in `row'
+    }
+}
+local row = `row' + 1
+
+replace Variable = "Avg Poverty Gap Post Monthly (€)" in `row'
+foreach yr of local years {
+    replace Value_`yr'_O = `argam_`yr'_0' in `row'
+    replace Value_`yr'_P = `argam_`yr'_1' in `row'
+    if `argam_`yr'_0' != 0 & !missing(`argam_`yr'_0') {
+        replace Value_`yr'_ChPc = ((`argam_`yr'_1' - `argam_`yr'_0') / `argam_`yr'_0') * 100 in `row'
+    }
+}
+local row = `row' + 1
+
+replace Variable = "Number of Employed" in `row'
+foreach yr of local years {
+    replace Value_`yr'_O = `nwrk_`yr'_0' in `row'
+    replace Value_`yr'_P = `nwrk_`yr'_1' in `row'
+    if `nwrk_`yr'_0' != 0 & !missing(`nwrk_`yr'_0') {
+        replace Value_`yr'_ChPc = ((`nwrk_`yr'_1' - `nwrk_`yr'_0') / `nwrk_`yr'_0') * 100 in `row'
+    }
+}
+local row = `row' + 1
+
+replace Variable = "IWP Rate Pre Transfer (%)" in `row'
+foreach yr of local years {
+    replace Value_`yr'_O = `iwpre_`yr'_0' in `row'
+    replace Value_`yr'_P = `iwpre_`yr'_1' in `row'
+    if `iwpre_`yr'_0' != 0 & !missing(`iwpre_`yr'_0') {
+        replace Value_`yr'_ChPc = ((`iwpre_`yr'_1' - `iwpre_`yr'_0') / `iwpre_`yr'_0') * 100 in `row'
+    }
+}
+local row = `row' + 1
+
+replace Variable = "Number Employees IWP (Pre Transfer)" in `row'
+foreach yr of local years {
+    replace Value_`yr'_O = `niwpre_`yr'_0' in `row'
+    replace Value_`yr'_P = `niwpre_`yr'_1' in `row'
+    if `niwpre_`yr'_0' != 0 & !missing(`niwpre_`yr'_0') {
+        replace Value_`yr'_ChPc = ((`niwpre_`yr'_1' - `niwpre_`yr'_0') / `niwpre_`yr'_0') * 100 in `row'
+    }
+}
+local row = `row' + 1
+
+replace Variable = "Avg IWP Gap Pre Annual (€)" in `row'
+foreach yr of local years {
+    replace Value_`yr'_O = `iwpre_ga_`yr'_0' in `row'
+    replace Value_`yr'_P = `iwpre_ga_`yr'_1' in `row'
+    if `iwpre_ga_`yr'_0' != 0 & !missing(`iwpre_ga_`yr'_0') {
+        replace Value_`yr'_ChPc = ((`iwpre_ga_`yr'_1' - `iwpre_ga_`yr'_0') / `iwpre_ga_`yr'_0') * 100 in `row'
+    }
+}
+local row = `row' + 1
+
+replace Variable = "Avg IWP Gap Pre Monthly (€)" in `row'
+foreach yr of local years {
+    replace Value_`yr'_O = `iwpre_gam_`yr'_0' in `row'
+    replace Value_`yr'_P = `iwpre_gam_`yr'_1' in `row'
+    if `iwpre_gam_`yr'_0' != 0 & !missing(`iwpre_gam_`yr'_0') {
+        replace Value_`yr'_ChPc = ((`iwpre_gam_`yr'_1' - `iwpre_gam_`yr'_0') / `iwpre_gam_`yr'_0') * 100 in `row'
+    }
+}
+local row = `row' + 1
+
+replace Variable = "Avg Months Worked" in `row'
+foreach yr of local years {
+    replace Value_`yr'_O = `mon_`yr'_0' in `row'
+    replace Value_`yr'_P = `mon_`yr'_1' in `row'
+    if `mon_`yr'_0' != 0 & !missing(`mon_`yr'_0') {
+        replace Value_`yr'_ChPc = ((`mon_`yr'_1' - `mon_`yr'_0') / `mon_`yr'_0') * 100 in `row'
+    }
+}
+local row = `row' + 2
+
+replace Variable = "Poverty Threshold Annual (€)" in `row'
+foreach yr of local years {
+    replace Value_`yr'_O = `pl_`yr'_0' in `row'
+    replace Value_`yr'_P = `pl_`yr'_1' in `row'
+    if `pl_`yr'_0' != 0 & !missing(`pl_`yr'_0') {
+        replace Value_`yr'_ChPc = ((`pl_`yr'_1' - `pl_`yr'_0') / `pl_`yr'_0') * 100 in `row'
+    }
+}
+local row = `row' + 1
+
+replace Variable = "Poverty Threshold Monthly (€)" in `row'
+foreach yr of local years {
+    replace Value_`yr'_O = `plm_`yr'_0' in `row'
+    replace Value_`yr'_P = `plm_`yr'_1' in `row'
+    if `plm_`yr'_0' != 0 & !missing(`plm_`yr'_0') {
+        replace Value_`yr'_ChPc = ((`plm_`yr'_1' - `plm_`yr'_0') / `plm_`yr'_0') * 100 in `row'
+    }
+}
+local row = `row' + 3
+
+*-------------------------------------------------------------------------------
+* HOUSEHOLD TYPES
+*-------------------------------------------------------------------------------
+replace Variable = "=== POVERTY BY HOUSEHOLD TYPE ===" in `row'
+local row = `row' + 2
+
+local hh_label_1  "1 Erwachsener"
+local hh_label_2  "1 Erwachsener + 1 Kind"
+local hh_label_3  "1 Erwachsener + 2+ Kinder"
+local hh_label_4  "2 Erwachsene"
+local hh_label_5  "2 Erwachsene + 1 Kind"
+local hh_label_6  "2 Erwachsene + 2 Kinder"
+local hh_label_7  "2 Erwachsene + 3+ Kinder"
+local hh_label_8  "3+ Erwachsene"
+local hh_label_9  "3+ Erwachsene mit Kindern"
+local hh_label_10 "Sonstige"
+
+forvalues ht = 1/10 {
+
+    replace Variable = "=== HH Typ `ht' `hh_label_`ht'' ===" in `row'
+    local row = `row' + 1
+
+    replace Variable = "Total population" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_O = `ntt_hh`ht'_`yr'_0' in `row'
+        replace Value_`yr'_P = `ntt_hh`ht'_`yr'_1' in `row'
+        if `ntt_hh`ht'_`yr'_0' != 0 & !missing(`ntt_hh`ht'_`yr'_0') {
+            replace Value_`yr'_ChPc = ((`ntt_hh`ht'_`yr'_1' - `ntt_hh`ht'_`yr'_0') / `ntt_hh`ht'_`yr'_0') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+
+    replace Variable = "AROP Rate Pre Transfer (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_O = `arpre_hh`ht'_`yr'_0' in `row'
+        replace Value_`yr'_P = `arpre_hh`ht'_`yr'_1' in `row'
+        if `arpre_hh`ht'_`yr'_0' != 0 & !missing(`arpre_hh`ht'_`yr'_0') {
+            replace Value_`yr'_ChPc = ((`arpre_hh`ht'_`yr'_1' - `arpre_hh`ht'_`yr'_0') / `arpre_hh`ht'_`yr'_0') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+
+    replace Variable = "Number People AROP (Pre Transfer)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_O = `narpre_hh`ht'_`yr'_0' in `row'
+        replace Value_`yr'_P = `narpre_hh`ht'_`yr'_1' in `row'
+        if `narpre_hh`ht'_`yr'_0' != 0 & !missing(`narpre_hh`ht'_`yr'_0') {
+            replace Value_`yr'_ChPc = ((`narpre_hh`ht'_`yr'_1' - `narpre_hh`ht'_`yr'_0') / `narpre_hh`ht'_`yr'_0') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+
+    replace Variable = "Avg Poverty Gap Pre Annual (€)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_O = `arpre_ga_hh`ht'_`yr'_0' in `row'
+        replace Value_`yr'_P = `arpre_ga_hh`ht'_`yr'_1' in `row'
+        if `arpre_ga_hh`ht'_`yr'_0' != 0 & !missing(`arpre_ga_hh`ht'_`yr'_0') {
+            replace Value_`yr'_ChPc = ((`arpre_ga_hh`ht'_`yr'_1' - `arpre_ga_hh`ht'_`yr'_0') / `arpre_ga_hh`ht'_`yr'_0') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+
+    replace Variable = "Avg Poverty Gap Pre Monthly (€)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_O = `arpre_gam_hh`ht'_`yr'_0' in `row'
+        replace Value_`yr'_P = `arpre_gam_hh`ht'_`yr'_1' in `row'
+        if `arpre_gam_hh`ht'_`yr'_0' != 0 & !missing(`arpre_gam_hh`ht'_`yr'_0') {
+            replace Value_`yr'_ChPc = ((`arpre_gam_hh`ht'_`yr'_1' - `arpre_gam_hh`ht'_`yr'_0') / `arpre_gam_hh`ht'_`yr'_0') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+
+    replace Variable = "Avg Poverty Gap Post Monthly (€)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_O = `argam_hh`ht'_`yr'_0' in `row'
+        replace Value_`yr'_P = `argam_hh`ht'_`yr'_1' in `row'
+        if `argam_hh`ht'_`yr'_0' != 0 & !missing(`argam_hh`ht'_`yr'_0') {
+            replace Value_`yr'_ChPc = ((`argam_hh`ht'_`yr'_1' - `argam_hh`ht'_`yr'_0') / `argam_hh`ht'_`yr'_0') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+
+  
+    replace Variable = "Number of Employed" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_O = `nwrk_hh`ht'_`yr'_0' in `row'
+        replace Value_`yr'_P = `nwrk_hh`ht'_`yr'_1' in `row'
+        if `nwrk_hh`ht'_`yr'_0' != 0 & !missing(`nwrk_hh`ht'_`yr'_0') {
+            replace Value_`yr'_ChPc = ((`nwrk_hh`ht'_`yr'_1' - `nwrk_hh`ht'_`yr'_0') / `nwrk_hh`ht'_`yr'_0') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+
+    replace Variable = "IWP Rate Pre Transfer (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_O = `iwpre_hh`ht'_`yr'_0' in `row'
+        replace Value_`yr'_P = `iwpre_hh`ht'_`yr'_1' in `row'
+        if `iwpre_hh`ht'_`yr'_0' != 0 & !missing(`iwpre_hh`ht'_`yr'_0') {
+            replace Value_`yr'_ChPc = ((`iwpre_hh`ht'_`yr'_1' - `iwpre_hh`ht'_`yr'_0') / `iwpre_hh`ht'_`yr'_0') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+
+    replace Variable = "Number Employees IWP (Pre Transfer)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_O = `niwpre_hh`ht'_`yr'_0' in `row'
+        replace Value_`yr'_P = `niwpre_hh`ht'_`yr'_1' in `row'
+        if `niwpre_hh`ht'_`yr'_0' != 0 & !missing(`niwpre_hh`ht'_`yr'_0') {
+            replace Value_`yr'_ChPc = ((`niwpre_hh`ht'_`yr'_1' - `niwpre_hh`ht'_`yr'_0') / `niwpre_hh`ht'_`yr'_0') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+
+    replace Variable = "Avg IWP Gap Pre Annual (€)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_O = `iwpre_ga_hh`ht'_`yr'_0' in `row'
+        replace Value_`yr'_P = `iwpre_ga_hh`ht'_`yr'_1' in `row'
+        if `iwpre_ga_hh`ht'_`yr'_0' != 0 & !missing(`iwpre_ga_hh`ht'_`yr'_0') {
+            replace Value_`yr'_ChPc = ((`iwpre_ga_hh`ht'_`yr'_1' - `iwpre_ga_hh`ht'_`yr'_0') / `iwpre_ga_hh`ht'_`yr'_0') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+
+    replace Variable = "Avg IWP Gap Pre Monthly (€)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_O = `iwpre_gam_hh`ht'_`yr'_0' in `row'
+        replace Value_`yr'_P = `iwpre_gam_hh`ht'_`yr'_1' in `row'
+        if `iwpre_gam_hh`ht'_`yr'_0' != 0 & !missing(`iwpre_gam_hh`ht'_`yr'_0') {
+            replace Value_`yr'_ChPc = ((`iwpre_gam_hh`ht'_`yr'_1' - `iwpre_gam_hh`ht'_`yr'_0') / `iwpre_gam_hh`ht'_`yr'_0') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+
+    replace Variable = "Avg Months Worked" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_O = `mon_hh`ht'_`yr'_0' in `row'
+        replace Value_`yr'_P = `mon_hh`ht'_`yr'_1' in `row'
+        if `mon_hh`ht'_`yr'_0' != 0 & !missing(`mon_hh`ht'_`yr'_0') {
+            replace Value_`yr'_ChPc = ((`mon_hh`ht'_`yr'_1' - `mon_hh`ht'_`yr'_0') / `mon_hh`ht'_`yr'_0') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+
+    replace Variable = "Poverty Threshold Annual (€)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_O = `pl_hh`ht'_`yr'_0' in `row'
+        replace Value_`yr'_P = `pl_hh`ht'_`yr'_1' in `row'
+        if `pl_hh`ht'_`yr'_0' != 0 & !missing(`pl_hh`ht'_`yr'_0') {
+            replace Value_`yr'_ChPc = ((`pl_hh`ht'_`yr'_1' - `pl_hh`ht'_`yr'_0') / `pl_hh`ht'_`yr'_0') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+
+    replace Variable = "Poverty Threshold Monthly (€)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_O = `plm_hh`ht'_`yr'_0' in `row'
+        replace Value_`yr'_P = `plm_hh`ht'_`yr'_1' in `row'
+        if `plm_hh`ht'_`yr'_0' != 0 & !missing(`plm_hh`ht'_`yr'_0') {
+            replace Value_`yr'_ChPc = ((`plm_hh`ht'_`yr'_1' - `plm_hh`ht'_`yr'_0') / `plm_hh`ht'_`yr'_0') * 100 in `row'
+        }
+    }
+    local row = `row' + 2
+}
+
+*-------------------------------------------------------------------------------
+* EXPORT
+*-------------------------------------------------------------------------------
+keep if Variable != ""
+
+foreach yr of local years {
+    format Value_`yr'_O    %15.2f
+    format Value_`yr'_P    %15.2f
+    format Value_`yr'_ChPc %15.2f
+}
+
+capture mkdir "$output"
+export excel "$output\ALL_POV_PreTransfer_EUROMOD.xlsx", replace sheet("Combined") firstrow(variables)
+
+di as result _n "=== DONE ===" _n
+di "Output: ALL_POV_PreTransfer_EUROMOD.xlsx"
+
+restore
