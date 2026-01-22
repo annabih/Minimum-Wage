@@ -1,1 +1,968 @@
 
+*******************************************************************************************************************************************************************************************
+*** Titel: Combined Poverty Analysis with Pre Transfer Comparison and Household Decomposition EU SILC Austria 2015 2024
+*** Date: 19.01.2026
+*** Aim: Combined AROP and IWP calculation with pre transfer HY023 comparison and household type decomposition
+*** Method: Poverty threshold is based on post transfer HX090 median, applied to post transfer HX090 and pre transfer HY023 based equivalised incomes
+*** Pre Transfer: HY023 is household disposable income before all social transfers, not equivalised, divided by OECD equivalence weight
+*** Output: One Excel file with one combined sheet only
+*******************************************************************************************************************************************************************************************
+clear all
+set more off
+
+use "D:\Data\AT_CROSS\SILC_CrossSec_AllYears_2015_2024.dta"
+global output "D:\InWorkPoverty_SILC"
+
+local years "2015 2016 2017 2018 2019 2020 2021 2022 2023 2024"
+
+di _n "=== Original observations: " _N " ===" _n
+
+*===============================================================================
+* DESTRING ALL NUMERIC VARIABLES
+*===============================================================================
+di _n "=== Destringing variables ===" _n
+
+local numeric_vars "HX090 HY023 RB050 PB040 RX010 PX010 PL073 PL074 PL075 PL076 year HX040 HX050"
+
+foreach var of local numeric_vars {
+    capture confirm variable `var'
+    if _rc == 0 {
+        capture confirm string variable `var'
+        if _rc == 0 {
+            di "Converting `var' from string to numeric..."
+            replace `var' = subinstr(`var', ",", ".", .)
+            destring `var', replace force
+            di "   -> `var' converted"
+        }
+        else {
+            di "`var' is already numeric"
+        }
+    }
+    else {
+        di as text "   `var' not found (skipping)"
+    }
+}
+
+*===============================================================================
+* VARIABLE PREPARATION
+*===============================================================================
+di _n "=== Preparing variables ===" _n
+
+* Personal weight
+capture confirm variable RB050
+if _rc == 0 {
+    gen dwt = RB050
+}
+else {
+    gen dwt = PB040
+}
+label variable dwt "Personal cross sectional weight"
+
+* Age
+capture confirm variable RX010
+if _rc == 0 {
+    gen age = RX010
+}
+else {
+    gen age = PX010
+}
+label variable age "Age"
+
+* Months worked employee and self employed
+capture confirm variable PL073
+if _rc == 0 {
+    gen months_ft_emp = PL073
+    replace months_ft_emp = 0 if missing(months_ft_emp)
+}
+else {
+    gen months_ft_emp = 0
+}
+
+capture confirm variable PL074
+if _rc == 0 {
+    gen months_pt_emp = PL074
+    replace months_pt_emp = 0 if missing(months_pt_emp)
+}
+else {
+    gen months_pt_emp = 0
+}
+
+capture confirm variable PL075
+if _rc == 0 {
+    gen months_ft_self = PL075
+    replace months_ft_self = 0 if missing(months_ft_self)
+}
+else {
+    gen months_ft_self = 0
+}
+
+capture confirm variable PL076
+if _rc == 0 {
+    gen months_pt_self = PL076
+    replace months_pt_self = 0 if missing(months_pt_self)
+}
+else {
+    gen months_pt_self = 0
+}
+
+gen months_worked = months_ft_emp + months_pt_emp + months_ft_self + months_pt_self
+replace months_worked = 12 if months_worked > 12 & !missing(months_worked)
+label variable months_worked "Total months worked employee plus self employed"
+
+* Post transfer equivalised income
+gen eq_hh_post = HX090
+label variable eq_hh_post "Equivalised income post transfer HX090"
+
+drop if missing(eq_hh_post) | missing(dwt) | missing(age)
+di _n "Observations after dropping missing: " _N _n
+
+*===============================================================================
+* HOUSEHOLD COMPOSITION AND OECD EQUIVALENCE WEIGHTS
+*===============================================================================
+di _n "=== Creating household composition variables ===" _n
+
+capture confirm variable id_hh
+if _rc == 0 {
+    gen hh_id = id_hh
+    di "Using id_hh as household identifier"
+}
+else {
+    capture confirm variable HB030
+    if _rc == 0 {
+        gen hh_id = HB030
+        di "Using HB030 as household identifier"
+    }
+    else {
+        capture confirm variable DB030
+        if _rc == 0 {
+            gen hh_id = DB030
+            di "Using DB030 as household identifier"
+        }
+        else {
+            di as error "No household ID found"
+            exit 1
+        }
+    }
+}
+
+bysort year hh_id: egen n_adults = total(age >= 14)
+bysort year hh_id: egen n_children = total(age < 14)
+bysort year hh_id: egen hh_size = count(hh_id)
+
+label variable n_adults "Number of adults 14 plus"
+label variable n_children "Number of children under 14"
+label variable hh_size "Household size"
+
+di _n "=== Classifying household types ===" _n
+
+gen hh_type = .
+replace hh_type = 1 if n_adults == 1 & n_children == 0
+replace hh_type = 2 if n_adults == 1 & n_children == 1
+replace hh_type = 3 if n_adults == 1 & n_children >= 2
+replace hh_type = 4 if n_adults == 2 & n_children == 0
+replace hh_type = 5 if n_adults == 2 & n_children == 1
+replace hh_type = 6 if n_adults == 2 & n_children == 2
+replace hh_type = 7 if n_adults == 2 & n_children >= 3
+replace hh_type = 8 if n_adults >= 3 & n_children == 0
+replace hh_type = 9 if n_adults >= 3 & n_children >= 1
+replace hh_type = 10 if missing(hh_type)
+
+label define hh_type_lbl 1 "1 Erwachsener" 2 "1 Erwachsener + 1 Kind" 3 "1 Erwachsener + 2+ Kinder" 4 "2 Erwachsene" 5 "2 Erwachsene + 1 Kind" 6 "2 Erwachsene + 2 Kinder" 7 "2 Erwachsene + 3+ Kinder" 8 "3+ Erwachsene" 9 "3+ Erwachsene mit Kindern" 10 "Sonstige"
+label values hh_type hh_type_lbl
+label variable hh_type "Household type"
+
+tab hh_type, missing
+
+di _n "=== Calculating OECD modified equivalence weights ===" _n
+
+gen double oecd_w = 1.0 + (n_adults - 1) * 0.5 + n_children * 0.3
+label variable oecd_w "OECD modified equivalence weight"
+
+table hh_type, contents(mean oecd_w min oecd_w max oecd_w) format(%6.2f)
+
+*===============================================================================
+* PRE TRANSFER EQUIVALISED INCOME
+*===============================================================================
+di _n "=== Creating pre transfer equivalised income ===" _n
+
+gen double eq_hh_pre = HY023 / oecd_w
+label variable eq_hh_pre "Equivalised income pre transfer HY023 divided by OECD weight"
+
+gen double tr_amt = eq_hh_post - eq_hh_pre
+label variable tr_amt "Transfer amount equivalised annual"
+
+*===============================================================================
+* POVERTY THRESHOLD BASED ON POST TRANSFER MEDIAN
+*===============================================================================
+di _n "=== Calculating base poverty thresholds ===" _n
+
+tempfile thresholds
+tempname h
+
+postfile `h' int year double med_post pov60 using `thresholds', replace
+
+foreach yr of local years {
+    quietly count if year == `yr'
+    if r(N) == 0 continue
+
+    quietly _pctile eq_hh_post [pw=dwt] if year == `yr', p(50)
+    local medval = r(r1)
+    post `h' (`yr') (`medval') (0.60*`medval')
+    di "Year `yr' Median=" %12.2f `medval' " Threshold=" %12.2f (0.60*`medval')
+}
+
+postclose `h'
+merge m:1 year using `thresholds', nogen
+
+replace pov60 = round(pov60, 1)
+label variable med_post "Median eq income post transfer"
+label variable pov60 "Poverty threshold 60 percent of median based on post transfer"
+
+* Household type specific monthly line for display only
+capture drop pov_hh
+gen double pov_hh = round(pov60 * oecd_w, 1)
+capture drop pov_hh_m
+gen double pov_hh_m = round(pov_hh / 12, 1)
+label variable pov_hh_m "Poverty line household type monthly derived from post transfer threshold"
+
+*===============================================================================
+* POVERTY STATUS POST AND PRE
+*===============================================================================
+di _n "=== Generating poverty status post and pre ===" _n
+
+* AROP post
+gen byte arop = .
+replace arop = 1 if eq_hh_post < pov60 & !missing(pov60)
+replace arop = 0 if eq_hh_post >= pov60 & !missing(pov60)
+label variable arop "AROP post transfer"
+
+gen double ar_ga = .
+replace ar_ga = pov60 - eq_hh_post if arop == 1
+label variable ar_ga "AROP gap absolute post"
+
+gen double ar_gr = .
+replace ar_gr = ((pov60 - eq_hh_post) / pov60) * 100 if arop == 1
+label variable ar_gr "AROP gap relative post percent"
+
+* AROP pre
+gen byte arop_pre = .
+replace arop_pre = 1 if eq_hh_pre < pov60 & !missing(pov60)
+replace arop_pre = 0 if eq_hh_pre >= pov60 & !missing(pov60)
+label variable arop_pre "AROP pre transfer"
+
+gen double arpre_ga = .
+replace arpre_ga = pov60 - eq_hh_pre if arop_pre == 1
+label variable arpre_ga "AROP gap absolute pre"
+
+gen double arpre_gr = .
+replace arpre_gr = ((pov60 - eq_hh_pre) / pov60) * 100 if arop_pre == 1
+label variable arpre_gr "AROP gap relative pre percent"
+
+* Lifted out measures
+gen byte lifted = (arop_pre == 1 & arop == 0)
+label variable lifted "Lifted out of poverty by transfers"
+
+gen byte stillpoor = (arop_pre == 1 & arop == 1)
+label variable stillpoor "Still poor after transfers"
+
+gen byte pushed = (arop_pre == 0 & arop == 1)
+label variable pushed "Pushed into poverty"
+
+*===============================================================================
+* AGE GROUPS AND WORKER DEFINITION
+*===============================================================================
+di _n "=== Defining age groups and workers ===" _n
+
+gen age_group = .
+replace age_group = 1 if age < 18
+replace age_group = 2 if age >= 18 & age < 65
+replace age_group = 3 if age >= 65
+label define age_lbl 1 "Children" 2 "Working age" 3 "Elderly"
+label values age_group age_lbl
+
+gen worker = (months_worked > 6 & age >= 18 & age <= 64)
+label variable worker "Worker more than 6 months age 18 to 64"
+
+*===============================================================================
+* IN WORK POVERTY POST AND PRE
+*===============================================================================
+di _n "=== Generating in work poverty status ===" _n
+
+* IWP post
+gen inwork_poor = (worker == 1 & arop == 1)
+label variable inwork_poor "IWP post transfer"
+
+gen double iw_ga = pov60 - eq_hh_post if inwork_poor == 1
+label variable iw_ga "IWP gap absolute post"
+
+gen double iw_gr = ((pov60 - eq_hh_post) / pov60) * 100 if inwork_poor == 1
+label variable iw_gr "IWP gap relative post percent"
+
+* IWP pre
+gen inwork_poor_pre = (worker == 1 & arop_pre == 1)
+label variable inwork_poor_pre "IWP pre transfer"
+
+gen double iwpre_ga = pov60 - eq_hh_pre if inwork_poor_pre == 1
+label variable iwpre_ga "IWP gap absolute pre"
+
+gen double iwpre_gr = ((pov60 - eq_hh_pre) / pov60) * 100 if inwork_poor_pre == 1
+label variable iwpre_gr "IWP gap relative pre percent"
+
+gen byte iwlifted = (inwork_poor_pre == 1 & inwork_poor == 0)
+label variable iwlifted "Workers lifted out by transfers"
+
+di _n "Poverty status identified"
+di "Total observations: " _N
+
+capture mkdir "$output"
+save "$output/ALL_POV_IND_SILC_PreTransfer.dta", replace
+di "Micro level data saved"
+
+*===============================================================================
+* YEAR LEVEL STATISTICS WITH SHORT LOCAL NAMES
+*===============================================================================
+di _n "=== Calculating statistics by year ===" _n
+
+foreach yr of local years {
+
+    quietly count if year == `yr'
+    if r(N) == 0 continue
+
+    * Totals
+    sum dwt if year == `yr'
+    local nt_`yr' = r(sum)
+
+    * AROP post
+    sum arop [aw=dwt] if year == `yr'
+    local ar_`yr' = r(mean) * 100
+
+    gen temp_ar_`yr' = arop * dwt if year == `yr'
+    sum temp_ar_`yr'
+    local nar_`yr' = r(sum)
+    drop temp_ar_`yr'
+
+    quietly count if year == `yr' & arop == 1
+    if r(N) > 0 {
+        sum ar_ga [aw=dwt] if year == `yr' & arop == 1
+        local arga_`yr' = r(mean)
+        local argam_`yr' = r(mean) / 12
+
+        sum ar_gr [aw=dwt] if year == `yr' & arop == 1
+        local argr_`yr' = r(mean)
+    }
+    else {
+        local arga_`yr' = .
+        local argam_`yr' = .
+        local argr_`yr' = .
+    }
+
+    * AROP pre
+    sum arop_pre [aw=dwt] if year == `yr'
+    local arpre_`yr' = r(mean) * 100
+
+    gen temp_arpre_`yr' = arop_pre * dwt if year == `yr'
+    sum temp_arpre_`yr'
+    local narpre_`yr' = r(sum)
+    drop temp_arpre_`yr'
+
+    quietly count if year == `yr' & arop_pre == 1
+    if r(N) > 0 {
+        sum arpre_ga [aw=dwt] if year == `yr' & arop_pre == 1
+        local arpre_ga_`yr' = r(mean)
+        local arpre_gam_`yr' = r(mean) / 12
+
+        sum arpre_gr [aw=dwt] if year == `yr' & arop_pre == 1
+        local arpre_gr_`yr' = r(mean)
+    }
+    else {
+        local arpre_ga_`yr' = .
+        local arpre_gam_`yr' = .
+        local arpre_gr_`yr' = .
+    }
+
+    * AROP reduction
+    local arrpp_`yr' = `arpre_`yr'' - `ar_`yr''
+    if `arpre_`yr'' > 0 {
+        local arrpc_`yr' = (`arrpp_`yr'' / `arpre_`yr'') * 100
+    }
+    else {
+        local arrpc_`yr' = .
+    }
+
+    * NEW: Change mean poverty gap (pre minus post)
+    if missing(`arpre_ga_`yr'') | missing(`arga_`yr'') {
+        local ch_ar_gap_a_`yr' = .
+        local ch_ar_gap_m_`yr' = .
+    }
+    else {
+        local ch_ar_gap_a_`yr' = `arpre_ga_`yr'' - `arga_`yr''
+        local ch_ar_gap_m_`yr' = `arpre_gam_`yr'' - `argam_`yr''
+    }
+
+    gen temp_lift_`yr' = lifted * dwt if year == `yr'
+    sum temp_lift_`yr'
+    local nlift_`yr' = r(sum)
+    drop temp_lift_`yr'
+
+    * IWP post
+    quietly count if year == `yr' & worker == 1
+    if r(N) > 0 {
+        sum inwork_poor [aw=dwt] if year == `yr' & worker == 1
+        local iw_`yr' = r(mean) * 100
+
+        sum dwt if year == `yr' & worker == 1
+        local nwrk_`yr' = r(sum)
+
+        gen temp_iw_`yr' = inwork_poor * dwt if year == `yr' & worker == 1
+        sum temp_iw_`yr'
+        local niw_`yr' = r(sum)
+        drop temp_iw_`yr'
+
+        quietly count if year == `yr' & inwork_poor == 1
+        if r(N) > 0 {
+            sum iw_ga [aw=dwt] if year == `yr' & inwork_poor == 1
+            local iwga_`yr' = r(mean)
+            local iwgam_`yr' = r(mean) / 12
+
+            sum iw_gr [aw=dwt] if year == `yr' & inwork_poor == 1
+            local iwgr_`yr' = r(mean)
+        }
+        else {
+            local iwga_`yr' = .
+            local iwgam_`yr' = .
+            local iwgr_`yr' = .
+        }
+
+        sum months_worked [aw=dwt] if year == `yr' & worker == 1
+        local mon_`yr' = r(mean)
+    }
+    else {
+        local iw_`yr' = .
+        local nwrk_`yr' = .
+        local niw_`yr' = .
+        local iwga_`yr' = .
+        local iwgam_`yr' = .
+        local iwgr_`yr' = .
+        local mon_`yr' = .
+    }
+
+    * IWP pre
+    quietly count if year == `yr' & worker == 1
+    if r(N) > 0 {
+        sum inwork_poor_pre [aw=dwt] if year == `yr' & worker == 1
+        local iwpre_`yr' = r(mean) * 100
+
+        gen temp_iwpre_`yr' = inwork_poor_pre * dwt if year == `yr' & worker == 1
+        sum temp_iwpre_`yr'
+        local niwpre_`yr' = r(sum)
+        drop temp_iwpre_`yr'
+
+        quietly count if year == `yr' & inwork_poor_pre == 1
+        if r(N) > 0 {
+            sum iwpre_ga [aw=dwt] if year == `yr' & inwork_poor_pre == 1
+            local iwpre_ga_`yr' = r(mean)
+            local iwpre_gam_`yr' = r(mean) / 12
+
+            sum iwpre_gr [aw=dwt] if year == `yr' & inwork_poor_pre == 1
+            local iwpre_gr_`yr' = r(mean)
+        }
+        else {
+            local iwpre_ga_`yr' = .
+            local iwpre_gam_`yr' = .
+            local iwpre_gr_`yr' = .
+        }
+
+        local iwrpp_`yr' = `iwpre_`yr'' - `iw_`yr''
+        if `iwpre_`yr'' > 0 {
+            local iwrpc_`yr' = (`iwrpp_`yr'' / `iwpre_`yr'') * 100
+        }
+        else {
+            local iwrpc_`yr' = .
+        }
+
+        gen temp_iwlift_`yr' = iwlifted * dwt if year == `yr' & worker == 1
+        sum temp_iwlift_`yr'
+        local niwlift_`yr' = r(sum)
+        drop temp_iwlift_`yr'
+    }
+    else {
+        local iwpre_`yr' = .
+        local niwpre_`yr' = .
+        local iwpre_ga_`yr' = .
+        local iwpre_gam_`yr' = .
+        local iwpre_gr_`yr' = .
+        local iwrpp_`yr' = .
+        local iwrpc_`yr' = .
+        local niwlift_`yr' = .
+    }
+
+    * Shared
+    sum pov60 if year == `yr', meanonly
+    local pl_`yr' = r(mean)
+    local plm_`yr' = round(r(mean) / 12, 1)
+
+    sum med_post if year == `yr', meanonly
+    local med_`yr' = r(mean)
+
+    sum eq_hh_post [aw=dwt] if year == `yr'
+    local meanpost_`yr' = r(mean)
+
+    sum eq_hh_pre [aw=dwt] if year == `yr'
+    local meanpre_`yr' = r(mean)
+
+    sum tr_amt [aw=dwt] if year == `yr'
+    local meantr_`yr' = r(mean)
+    local meantrm_`yr' = r(mean) / 12
+
+    di "Year `yr': PRE AROP=" %5.2f `arpre_`yr'' "% POST AROP=" %5.2f `ar_`yr'' "% Reduction pct=" %5.2f `arrpc_`yr'' 
+    di "         PRE IWP=" %5.2f `iwpre_`yr'' "% POST IWP=" %5.2f `iw_`yr'' "% Reduction pct=" %5.2f `iwrpc_`yr'' 
+}
+
+*===============================================================================
+* HOUSEHOLD TYPE DECOMPOSITION PRE AND POST WITH SHORT LOCAL NAMES
+*===============================================================================
+di _n "=== Calculating poverty by household type pre and post ===" _n
+
+foreach yr of local years {
+    quietly count if year == `yr'
+    if r(N) == 0 continue
+
+    sum dwt if year == `yr'
+    local tp_`yr' = r(sum)
+
+    gen temp_ar_post_`yr' = arop * dwt if year == `yr'
+    sum temp_ar_post_`yr'
+    local tar_`yr' = r(sum)
+    drop temp_ar_post_`yr'
+
+    gen temp_ar_pre_`yr' = arop_pre * dwt if year == `yr'
+    sum temp_ar_pre_`yr'
+    local tarpre_`yr' = r(sum)
+    drop temp_ar_pre_`yr'
+
+    gen temp_iw_post_`yr' = inwork_poor * dwt if year == `yr' & worker == 1
+    sum temp_iw_post_`yr'
+    local tiw_`yr' = r(sum)
+    drop temp_iw_post_`yr'
+
+    gen temp_iw_pre_`yr' = inwork_poor_pre * dwt if year == `yr' & worker == 1
+    sum temp_iw_pre_`yr'
+    local tiwpre_`yr' = r(sum)
+    drop temp_iw_pre_`yr'
+}
+
+foreach yr of local years {
+
+    quietly count if year == `yr'
+    if r(N) == 0 continue
+
+    forvalues ht = 1/10 {
+
+        quietly count if year == `yr' & hh_type == `ht'
+        if r(N) == 0 {
+            local sht_hh`ht'_`yr' = .
+            local ar_hh`ht'_`yr' = .
+            local arpre_hh`ht'_`yr' = .
+            local arrpp_hh`ht'_`yr' = .
+            local arrpc_hh`ht'_`yr' = .
+            local shar_hh`ht'_`yr' = .
+            local sharpre_hh`ht'_`yr' = .
+            local ntt_hh`ht'_`yr' = .
+            local nar_hh`ht'_`yr' = .
+            local narpre_hh`ht'_`yr' = .
+            local arga_hh`ht'_`yr' = .
+            local arpre_ga_hh`ht'_`yr' = .
+            local iw_hh`ht'_`yr' = .
+            local iwpre_hh`ht'_`yr' = .
+            local iwrpp_hh`ht'_`yr' = .
+            local iwrpc_hh`ht'_`yr' = .
+            local shiw_hh`ht'_`yr' = .
+            local shiwpre_hh`ht'_`yr' = .
+            local nwrk_hh`ht'_`yr' = .
+            local niw_hh`ht'_`yr' = .
+            local niwpre_hh`ht'_`yr' = .
+            local mon_hh`ht'_`yr' = .
+            local plm_hh`ht'_`yr' = .
+            continue
+        }
+
+        * Share of total population
+        sum dwt if year == `yr' & hh_type == `ht'
+        local ntt_hh`ht'_`yr' = r(sum)
+        local sht_hh`ht'_`yr' = (`ntt_hh`ht'_`yr'' / `tp_`yr'') * 100
+
+        * AROP post
+        sum arop [aw=dwt] if year == `yr' & hh_type == `ht'
+        local ar_hh`ht'_`yr' = r(mean) * 100
+
+        gen temp_nar_hh`ht'_`yr' = arop * dwt if year == `yr' & hh_type == `ht'
+        sum temp_nar_hh`ht'_`yr'
+        local nar_hh`ht'_`yr' = r(sum)
+        drop temp_nar_hh`ht'_`yr'
+
+        if `tar_`yr'' > 0 {
+            local shar_hh`ht'_`yr' = (`nar_hh`ht'_`yr'' / `tar_`yr'') * 100
+        }
+        else {
+            local shar_hh`ht'_`yr' = .
+        }
+
+        quietly count if year == `yr' & hh_type == `ht' & arop == 1
+        if r(N) > 0 {
+            sum ar_ga [aw=dwt] if year == `yr' & hh_type == `ht' & arop == 1
+            local arga_hh`ht'_`yr' = r(mean)
+        }
+        else {
+            local arga_hh`ht'_`yr' = .
+        }
+
+        * AROP pre
+        sum arop_pre [aw=dwt] if year == `yr' & hh_type == `ht'
+        local arpre_hh`ht'_`yr' = r(mean) * 100
+
+        gen temp_narpre_hh`ht'_`yr' = arop_pre * dwt if year == `yr' & hh_type == `ht'
+        sum temp_narpre_hh`ht'_`yr'
+        local narpre_hh`ht'_`yr' = r(sum)
+        drop temp_narpre_hh`ht'_`yr'
+
+        if `tarpre_`yr'' > 0 {
+            local sharpre_hh`ht'_`yr' = (`narpre_hh`ht'_`yr'' / `tarpre_`yr'') * 100
+        }
+        else {
+            local sharpre_hh`ht'_`yr' = .
+        }
+
+        quietly count if year == `yr' & hh_type == `ht' & arop_pre == 1
+        if r(N) > 0 {
+            sum arpre_ga [aw=dwt] if year == `yr' & hh_type == `ht' & arop_pre == 1
+            local arpre_ga_hh`ht'_`yr' = r(mean)
+        }
+        else {
+            local arpre_ga_hh`ht'_`yr' = .
+        }
+
+        * AROP reduction
+        local arrpp_hh`ht'_`yr' = `arpre_hh`ht'_`yr'' - `ar_hh`ht'_`yr''
+        if `arpre_hh`ht'_`yr'' > 0 {
+            local arrpc_hh`ht'_`yr' = (`arrpp_hh`ht'_`yr'' / `arpre_hh`ht'_`yr'') * 100
+        }
+        else {
+            local arrpc_hh`ht'_`yr' = .
+        }
+
+        * IWP post
+        quietly count if year == `yr' & hh_type == `ht' & worker == 1
+        if r(N) > 0 {
+            sum inwork_poor [aw=dwt] if year == `yr' & hh_type == `ht' & worker == 1
+            local iw_hh`ht'_`yr' = r(mean) * 100
+
+            sum dwt if year == `yr' & hh_type == `ht' & worker == 1
+            local nwrk_hh`ht'_`yr' = r(sum)
+
+            gen temp_niw_hh`ht'_`yr' = inwork_poor * dwt if year == `yr' & hh_type == `ht' & worker == 1
+            sum temp_niw_hh`ht'_`yr'
+            local niw_hh`ht'_`yr' = r(sum)
+            drop temp_niw_hh`ht'_`yr'
+
+            if `tiw_`yr'' > 0 {
+                local shiw_hh`ht'_`yr' = (`niw_hh`ht'_`yr'' / `tiw_`yr'') * 100
+            }
+            else {
+                local shiw_hh`ht'_`yr' = .
+            }
+
+            sum months_worked [aw=dwt] if year == `yr' & hh_type == `ht' & worker == 1
+            local mon_hh`ht'_`yr' = r(mean)
+        }
+        else {
+            local iw_hh`ht'_`yr' = .
+            local nwrk_hh`ht'_`yr' = .
+            local niw_hh`ht'_`yr' = .
+            local shiw_hh`ht'_`yr' = .
+            local mon_hh`ht'_`yr' = .
+        }
+
+        * IWP pre
+        quietly count if year == `yr' & hh_type == `ht' & worker == 1
+        if r(N) > 0 {
+            sum inwork_poor_pre [aw=dwt] if year == `yr' & hh_type == `ht' & worker == 1
+            local iwpre_hh`ht'_`yr' = r(mean) * 100
+
+            gen temp_niwpre_hh`ht'_`yr' = inwork_poor_pre * dwt if year == `yr' & hh_type == `ht' & worker == 1
+            sum temp_niwpre_hh`ht'_`yr'
+            local niwpre_hh`ht'_`yr' = r(sum)
+            drop temp_niwpre_hh`ht'_`yr'
+
+            if `tiwpre_`yr'' > 0 {
+                local shiwpre_hh`ht'_`yr' = (`niwpre_hh`ht'_`yr'' / `tiwpre_`yr'') * 100
+            }
+            else {
+                local shiwpre_hh`ht'_`yr' = .
+            }
+
+            local iwrpp_hh`ht'_`yr' = `iwpre_hh`ht'_`yr'' - `iw_hh`ht'_`yr''
+            if `iwpre_hh`ht'_`yr'' > 0 {
+                local iwrpc_hh`ht'_`yr' = (`iwrpp_hh`ht'_`yr'' / `iwpre_hh`ht'_`yr'') * 100
+            }
+            else {
+                local iwrpc_hh`ht'_`yr' = .
+            }
+        }
+        else {
+            local iwpre_hh`ht'_`yr' = .
+            local niwpre_hh`ht'_`yr' = .
+            local shiwpre_hh`ht'_`yr' = .
+            local iwrpp_hh`ht'_`yr' = .
+            local iwrpc_hh`ht'_`yr' = .
+        }
+
+        sum pov_hh_m if year == `yr' & hh_type == `ht', meanonly
+        local plm_hh`ht'_`yr' = r(mean)
+    }
+
+    di "Year `yr': household types done"
+}
+
+*===============================================================================
+* CREATE ONE COMBINED EXCEL OUTPUT
+* One file, one sheet: OVERVIEW first, then HH type block
+* Only selected variables
+*===============================================================================
+di _n "=== Creating combined Excel output (Overview + Household breakdown) ===" _n
+
+preserve
+clear
+set obs 2000
+
+gen str140 Variable = ""
+foreach yr of local years {
+    gen Value_`yr' = .
+}
+
+local row = 1
+
+*-------------------------------------------------------------------------------
+* OVERVIEW BLOCK (TOTAL POPULATION)
+*-------------------------------------------------------------------------------
+replace Variable = "=== OVERVIEW TOTAL POPULATION ===" in `row'
+local row = `row' + 2
+
+replace Variable = "Total population" in `row'
+foreach yr of local years {
+    replace Value_`yr' = `nt_`yr'' in `row'
+    format Value_`yr' %15.0f
+}
+local row = `row' + 1
+
+replace Variable = "AROP Rate Pre Transfer (%)" in `row'
+foreach yr of local years {
+    replace Value_`yr' = `arpre_`yr'' in `row'
+}
+local row = `row' + 1
+
+replace Variable = "Number People AROP (Pre Transfer)" in `row'
+foreach yr of local years {
+    replace Value_`yr' = `narpre_`yr'' in `row'
+    format Value_`yr' %15.0f
+}
+local row = `row' + 1
+
+replace Variable = "Avg Poverty Gap Pre Annual (€)" in `row'
+foreach yr of local years {
+    replace Value_`yr' = `arpre_ga_`yr'' in `row'
+}
+local row = `row' + 1
+
+replace Variable = "Avg Poverty Gap Pre Monthly (€)" in `row'
+foreach yr of local years {
+    replace Value_`yr' = `arpre_gam_`yr'' in `row'
+}
+local row = `row' + 1
+
+replace Variable = "Change Avg Poverty Gap Monthly (€)" in `row'
+foreach yr of local years {
+    replace Value_`yr' = `ch_ar_gap_m_`yr'' in `row'
+}
+local row = `row' + 2
+
+replace Variable = "Number of Employed" in `row'
+foreach yr of local years {
+    replace Value_`yr' = `nwrk_`yr'' in `row'
+    format Value_`yr' %15.0f
+}
+local row = `row' + 1
+
+replace Variable = "IWP Rate Pre Transfer (%)" in `row'
+foreach yr of local years {
+    replace Value_`yr' = `iwpre_`yr'' in `row'
+}
+local row = `row' + 1
+
+replace Variable = "Number Employees IWP (Pre Transfer)" in `row'
+foreach yr of local years {
+    replace Value_`yr' = `niwpre_`yr'' in `row'
+    format Value_`yr' %15.0f
+}
+local row = `row' + 1
+
+replace Variable = "Avg IWP Gap Pre Annual (€)" in `row'
+foreach yr of local years {
+    replace Value_`yr' = `iwpre_ga_`yr'' in `row'
+}
+local row = `row' + 1
+
+replace Variable = "Avg IWP Gap Pre Monthly (€)" in `row'
+foreach yr of local years {
+    replace Value_`yr' = `iwpre_gam_`yr'' in `row'
+}
+local row = `row' + 1
+
+replace Variable = "Avg Months Worked" in `row'
+foreach yr of local years {
+    replace Value_`yr' = `mon_`yr'' in `row'
+}
+local row = `row' + 2
+
+replace Variable = "Poverty Threshold Annual (€)" in `row'
+foreach yr of local years {
+    replace Value_`yr' = `pl_`yr'' in `row'
+    format Value_`yr' %15.0f
+}
+local row = `row' + 1
+
+replace Variable = "Poverty Threshold Monthly (€)" in `row'
+foreach yr of local years {
+    replace Value_`yr' = `plm_`yr'' in `row'
+    format Value_`yr' %15.0f
+}
+local row = `row' + 3
+
+
+*-------------------------------------------------------------------------------
+* HOUSEHOLD TYPE DECOMPOSITION BLOCK
+*-------------------------------------------------------------------------------
+replace Variable = "=== HOUSEHOLD TYPES (SAME VARIABLE SET) ===" in `row'
+local row = `row' + 2
+
+local hh_label_1 "1 Erwachsener"
+local hh_label_2 "1 Erwachsener + 1 Kind"
+local hh_label_3 "1 Erwachsener + 2+ Kinder"
+local hh_label_4 "2 Erwachsene"
+local hh_label_5 "2 Erwachsene + 1 Kind"
+local hh_label_6 "2 Erwachsene + 2 Kinder"
+local hh_label_7 "2 Erwachsene + 3+ Kinder"
+local hh_label_8 "3+ Erwachsene"
+local hh_label_9 "3+ Erwachsene mit Kindern"
+local hh_label_10 "Sonstige"
+
+forvalues ht = 1/10 {
+
+    replace Variable = "=== HH Typ `ht' `hh_label_`ht'' ===" in `row'
+    local row = `row' + 1
+
+    replace Variable = "Total population" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `ntt_hh`ht'_`yr'' in `row'
+        format Value_`yr' %15.0f
+    }
+    local row = `row' + 1
+
+    replace Variable = "AROP Rate Pre Transfer (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `arpre_hh`ht'_`yr'' in `row'
+    }
+    local row = `row' + 1
+
+    replace Variable = "Number People AROP (Pre Transfer)" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `narpre_hh`ht'_`yr'' in `row'
+        format Value_`yr' %15.0f
+    }
+    local row = `row' + 1
+
+    replace Variable = "Avg Poverty Gap Pre Annual (€)" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `arpre_ga_hh`ht'_`yr'' in `row'
+    }
+    local row = `row' + 1
+
+    replace Variable = "Avg Poverty Gap Pre Monthly (€)" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = (`arpre_ga_hh`ht'_`yr''/12) in `row'
+    }
+    local row = `row' + 1
+
+    replace Variable = "Change Avg Poverty Gap Monthly (€)" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = ((`arpre_ga_hh`ht'_`yr'' - `arga_hh`ht'_`yr'')/12) in `row'
+    }
+    local row = `row' + 1
+
+    replace Variable = "Number of Employed" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `nwrk_hh`ht'_`yr'' in `row'
+        format Value_`yr' %15.0f
+    }
+    local row = `row' + 1
+
+    replace Variable = "IWP Rate Pre Transfer (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `iwpre_hh`ht'_`yr'' in `row'
+    }
+    local row = `row' + 1
+
+    replace Variable = "Number Employees IWP (Pre Transfer)" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `niwpre_hh`ht'_`yr'' in `row'
+        format Value_`yr' %15.0f
+    }
+    local row = `row' + 1
+
+    replace Variable = "Avg IWP Gap Pre Annual (€)" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `iwpre_ga_hh`ht'_`yr'' in `row'
+    }
+    local row = `row' + 1
+
+    replace Variable = "Avg IWP Gap Pre Monthly (€)" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = (`iwpre_ga_hh`ht'_`yr''/12) in `row'
+    }
+    local row = `row' + 1
+
+    replace Variable = "Avg Months Worked" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `mon_hh`ht'_`yr'' in `row'
+    }
+    local row = `row' + 1
+
+    replace Variable = "Poverty Threshold Annual (€)" in `row'
+    foreach yr of local years {
+        quietly replace Value_`yr' = (`plm_hh`ht'_`yr''*12) in `row'
+        format Value_`yr' %15.0f
+    }
+    local row = `row' + 1
+
+    replace Variable = "Poverty Threshold Monthly (€)" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `plm_hh`ht'_`yr'' in `row'
+        format Value_`yr' %15.0f
+    }
+    local row = `row' + 2
+}
+
+*-------------------------------------------------------------------------------
+* FINALIZE AND EXPORT
+*-------------------------------------------------------------------------------
+keep if Variable != ""
+
+foreach yr of local years {
+    format Value_`yr' %15.2f
+}
+
+capture mkdir "$output"
+export excel "$output/ALL_POV_PreTransfer_Small_SILC.xlsx", replace sheet("Combined_PrePost") firstrow(variables)
+
+di as result "File saved: ALL_POV_PreTransfer_Small_SILC.xlsx sheet Combined_PrePost"
+
+restore
