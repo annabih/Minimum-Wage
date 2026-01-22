@@ -597,164 +597,132 @@ foreach yr of local years {
 }
 
 *===============================================================================
-* CREATE FORMATTED OUTPUT
+* CREATE ONE COMBINED EXCEL OUTPUT (ROBUST VIA POSTFILE)
+* One file, one sheet: OVERVIEW first, then HH type blocks 1-10
+* Only selected variables (same set for overview and household types)
 *===============================================================================
-di _n "=== Creating Excel output ===" _n
+di _n "=== Creating combined Excel output (Overview + Household breakdown) ===" _n
 
-preserve
+tempfile outxlsx
+tempname p
 
-clear
-set obs 450
-
-gen str80 Variable = ""
+* Build postfile varlist
+local postvars "str140 Variable"
 foreach yr of local years {
-    gen Value_`yr' = .
+    local postvars "`postvars' double Value_`yr'"
 }
 
-local row = 1
+postfile `p' `postvars' using `outxlsx', replace
 
-* OVERALL POVERTY SECTION
-replace Variable = "=== OVERALL POVERTY (AROP) ===" in `row'
-local row = `row' + 1
-replace Variable = "AROP rate (%)" in `row'
+* Helper row: all missings across years
+local missvals ""
 foreach yr of local years {
-    replace Value_`yr' = `arop_rate_`yr'' in `row'
+    local missvals "`missvals' (.)"
 }
-local row = `row' + 1
 
-replace Variable = "Total population" in `row'
+*-------------------------------------------------------------------------------
+* OVERVIEW BLOCK (TOTAL POPULATION)
+*-------------------------------------------------------------------------------
+post `p' ("=== OVERVIEW TOTAL POPULATION ===") `missvals'
+post `p' ("") `missvals'
+
+local vals ""
 foreach yr of local years {
-    replace Value_`yr' = `n_total_`yr'' in `row'
+    local vals "`vals' (`nt_`yr'')"
 }
-local row = `row' + 1
+post `p' ("Total population") `vals'
 
-replace Variable = "Number poor" in `row'
+local vals ""
 foreach yr of local years {
-    replace Value_`yr' = `n_arop_`yr'' in `row'
+    local vals "`vals' (`arpre_`yr'')"
 }
-local row = `row' + 1
+post `p' ("AROP Rate Pre Transfer (%)") `vals'
 
-replace Variable = "Avg poverty gap (Euro, annual)" in `row'
+local vals ""
 foreach yr of local years {
-    replace Value_`yr' = `arop_gap_abs_`yr'' in `row'
+    local vals "`vals' (`narpre_`yr'')"
 }
-local row = `row' + 1
+post `p' ("Number People AROP (Pre Transfer)") `vals'
 
-replace Variable = "Avg poverty gap (Euro, monthly)" in `row'
+local vals ""
 foreach yr of local years {
-    replace Value_`yr' = `arop_gap_abs_month_`yr'' in `row'
+    local vals "`vals' (`arpre_ga_`yr'')"
 }
-local row = `row' + 1
+post `p' ("Avg Poverty Gap Pre Annual (€)") `vals'
 
-replace Variable = "Avg poverty gap (Percent)" in `row'
+local vals ""
 foreach yr of local years {
-    replace Value_`yr' = `arop_gap_rel_`yr'' in `row'
+    local vals "`vals' (`arpre_gam_`yr'')"
 }
-local row = `row' + 1
+post `p' ("Avg Poverty Gap Pre Monthly (€)") `vals'
 
-replace Variable = "" in `row'
-local row = `row' + 1
-
-* IN-WORK POVERTY SECTION
-replace Variable = "=== IN-WORK POVERTY (IWP) ===" in `row'
-local row = `row' + 1
-replace Variable = "IWP rate (%)" in `row'
+local vals ""
 foreach yr of local years {
-    replace Value_`yr' = `iwp_rate_`yr'' in `row'
+    local vals "`vals' (`ch_ar_gap_m_`yr'')"
 }
-local row = `row' + 1
+post `p' ("Change Avg Poverty Gap Monthly (€)") `vals'
 
-replace Variable = "Number workers" in `row'
+post `p' ("") `missvals'
+
+local vals ""
 foreach yr of local years {
-    replace Value_`yr' = `n_workers_`yr'' in `row'
+    local vals "`vals' (`nwrk_`yr'')"
 }
-local row = `row' + 1
+post `p' ("Number of Employed") `vals'
 
-replace Variable = "Number IWP" in `row'
+local vals ""
 foreach yr of local years {
-    replace Value_`yr' = `n_iwp_`yr'' in `row'
+    local vals "`vals' (`iwpre_`yr'')"
 }
-local row = `row' + 1
+post `p' ("IWP Rate Pre Transfer (%)") `vals'
 
-replace Variable = "Avg months worked" in `row'
+local vals ""
 foreach yr of local years {
-    replace Value_`yr' = `months_`yr'' in `row'
+    local vals "`vals' (`niwpre_`yr'')"
 }
-local row = `row' + 1
+post `p' ("Number Employees IWP (Pre Transfer)") `vals'
 
-replace Variable = "Avg IWP gap (Euro, annual)" in `row'
+local vals ""
 foreach yr of local years {
-    replace Value_`yr' = `iwp_gap_abs_`yr'' in `row'
+    local vals "`vals' (`iwpre_ga_`yr'')"
 }
-local row = `row' + 1
+post `p' ("Avg IWP Gap Pre Annual (€)") `vals'
 
-replace Variable = "Avg IWP gap (Euro, monthly)" in `row'
+local vals ""
 foreach yr of local years {
-    replace Value_`yr' = `iwp_gap_abs_month_`yr'' in `row'
+    local vals "`vals' (`iwpre_gam_`yr'')"
 }
-local row = `row' + 1
+post `p' ("Avg IWP Gap Pre Monthly (€)") `vals'
 
-replace Variable = "Avg IWP gap (Percent)" in `row'
+local vals ""
 foreach yr of local years {
-    replace Value_`yr' = `iwp_gap_rel_`yr'' in `row'
+    local vals "`vals' (`mon_`yr'')"
 }
-local row = `row' + 1
+post `p' ("Avg Months Worked") `vals'
 
-replace Variable = "" in `row'
-local row = `row' + 1
+post `p' ("") `missvals'
 
-* SHARED SECTION
-replace Variable = "=== SHARED INDICATORS ===" in `row'
-local row = `row' + 1
-replace Variable = "Poverty line (Euro, annual)" in `row'
+local vals ""
 foreach yr of local years {
-    replace Value_`yr' = `pov_line_`yr'' in `row'
+    local vals "`vals' (`pl_`yr'')"
 }
-local row = `row' + 1
+post `p' ("Poverty Threshold Annual (€)") `vals'
 
-replace Variable = "Poverty line (Euro, monthly)" in `row'
+local vals ""
 foreach yr of local years {
-    replace Value_`yr' = `pov_line_month_`yr'' in `row'
+    local vals "`vals' (`plm_`yr'')"
 }
-local row = `row' + 1
+post `p' ("Poverty Threshold Monthly (€)") `vals'
 
-replace Variable = "Median equiv. income (Euro, annual)" in `row'
-foreach yr of local years {
-    replace Value_`yr' = `median_inc_`yr'' in `row'
-}
-local row = `row' + 1
+post `p' ("") `missvals'
+post `p' ("") `missvals'
 
-replace Variable = "Median equiv. income (Euro, monthly)" in `row'
-foreach yr of local years {
-    replace Value_`yr' = `median_inc_month_`yr'' in `row'
-}
-local row = `row' + 1
+*-------------------------------------------------------------------------------
+* HOUSEHOLD TYPE BLOCK (ALL TYPES 1 TO 10)
+*-------------------------------------------------------------------------------
+post `p' ("=== HOUSEHOLD TYPES (SAME VARIABLE SET) ===") `missvals'
+post `p' ("") `missvals'
 
-replace Variable = "Mean equiv. income (Euro, annual)" in `row'
-foreach yr of local years {
-    replace Value_`yr' = `mean_inc_`yr'' in `row'
-}
-local row = `row' + 1
-
-replace Variable = "Mean equiv. income (Euro, monthly)" in `row'
-foreach yr of local years {
-    replace Value_`yr' = `mean_inc_month_`yr'' in `row'
-}
-local row = `row' + 1
-
-replace Variable = "" in `row'
-local row = `row' + 1
-
-*===============================================================================
-* NEU: HOUSEHOLD TYPE DECOMPOSITION IM COMBINED SHEET
-*===============================================================================
-replace Variable = "=== ARMUT NACH HAUSHALTSTYP (OECD-Äquivalenzgewichte) ===" in `row'
-local row = `row' + 1
-
-replace Variable = "" in `row'
-local row = `row' + 1
-
-* Household type labels for combined sheet
 local hh_label_1 "1 Erwachsener"
 local hh_label_2 "1 Erwachsener + 1 Kind"
 local hh_label_3 "1 Erwachsener + 2+ Kinder"
@@ -764,365 +732,112 @@ local hh_label_6 "2 Erwachsene + 2 Kinder"
 local hh_label_7 "2 Erwachsene + 3+ Kinder"
 local hh_label_8 "3+ Erwachsene"
 local hh_label_9 "3+ Erwachsene mit Kindern"
+local hh_label_10 "Sonstige"
 
-* OECD weights for display
-local hh_weight_1 "1.0"
-local hh_weight_2 "1.3"
-local hh_weight_3 ">=1.6"
-local hh_weight_4 "1.5"
-local hh_weight_5 "1.8"
-local hh_weight_6 "2.1"
-local hh_weight_7 ">=2.4"
-local hh_weight_8 ">=2.0"
-local hh_weight_9 "variabel"
+forvalues ht = 1/10 {
 
-* Loop through each household type and add to combined sheet
-forvalues ht = 1/9 {
-    
-    replace Variable = "" in `row'
-    local row = `row' + 1
-    
-    replace Variable = "=== HH-TYP `ht': `hh_label_`ht'' (Gewicht: `hh_weight_`ht'') ===" in `row'
-    local row = `row' + 1
-    
-    * Share of total population
-    replace Variable = "Share of Total (%)" in `row'
+    post `p' ("=== HH Typ `ht' `hh_label_`ht'' ===") `missvals'
+
+    local vals ""
     foreach yr of local years {
-        replace Value_`yr' = `share_total_hh`ht'_`yr'' in `row'
+        local vals "`vals' (`ntt_hh`ht'_`yr'')"
     }
-    local row = `row' + 1
-    
-    * AROP Section
-    replace Variable = "AROP rate (%)" in `row'
+    post `p' ("Total population") `vals'
+
+    local vals ""
     foreach yr of local years {
-        replace Value_`yr' = `arop_rate_hh`ht'_`yr'' in `row'
+        local vals "`vals' (`arpre_hh`ht'_`yr'')"
     }
-    local row = `row' + 1
-    
-    replace Variable = "Share of those at risk of AROP (%)" in `row'
+    post `p' ("AROP Rate Pre Transfer (%)") `vals'
+
+    local vals ""
     foreach yr of local years {
-        replace Value_`yr' = `share_arop_hh`ht'_`yr'' in `row'
+        local vals "`vals' (`narpre_hh`ht'_`yr'')"
     }
-    local row = `row' + 1
-    
-    replace Variable = "Total population" in `row'
+    post `p' ("Number People AROP (Pre Transfer)") `vals'
+
+    local vals ""
     foreach yr of local years {
-        replace Value_`yr' = `n_total_hh`ht'_`yr'' in `row'
+        local vals "`vals' (`arpre_ga_hh`ht'_`yr'')"
     }
-    local row = `row' + 1
-    
-    replace Variable = "Number poor" in `row'
+    post `p' ("Avg Poverty Gap Pre Annual (€)") `vals'
+
+    local vals ""
     foreach yr of local years {
-        replace Value_`yr' = `n_arop_hh`ht'_`yr'' in `row'
+        local vals "`vals' (`=(`arpre_ga_hh`ht'_`yr''/12)')"
     }
-    local row = `row' + 1
-    
-    replace Variable = "Avg poverty gap (Euro, annual)" in `row'
+    post `p' ("Avg Poverty Gap Pre Monthly (€)") `vals'
+
+    local vals ""
     foreach yr of local years {
-        replace Value_`yr' = `arop_gap_abs_hh`ht'_`yr'' in `row'
+        local vals "`vals' (`=((`arpre_ga_hh`ht'_`yr'' - `arga_hh`ht'_`yr'')/12)')"
     }
-    local row = `row' + 1
-    
-    replace Variable = "Avg poverty gap (Euro, monthly)" in `row'
+    post `p' ("Change Avg Poverty Gap Monthly (€)") `vals'
+
+    post `p' ("") `missvals'
+
+    local vals ""
     foreach yr of local years {
-        replace Value_`yr' = `arop_gap_abs_month_hh`ht'_`yr'' in `row'
+        local vals "`vals' (`nwrk_hh`ht'_`yr'')"
     }
-    local row = `row' + 1
-    
-    replace Variable = "Avg poverty gap (Percent)" in `row'
+    post `p' ("Number of Employed") `vals'
+
+    local vals ""
     foreach yr of local years {
-        replace Value_`yr' = `arop_gap_rel_hh`ht'_`yr'' in `row'
+        local vals "`vals' (`iwpre_hh`ht'_`yr'')"
     }
-    local row = `row' + 1
-    
-    * IWP Section
-    replace Variable = "IWP rate (%)" in `row'
+    post `p' ("IWP Rate Pre Transfer (%)") `vals'
+
+    local vals ""
     foreach yr of local years {
-        replace Value_`yr' = `iwp_rate_hh`ht'_`yr'' in `row'
+        local vals "`vals' (`niwpre_hh`ht'_`yr'')"
     }
-    local row = `row' + 1
-    
-    replace Variable = "Share of those at risk of IWP (%)" in `row'
+    post `p' ("Number Employees IWP (Pre Transfer)") `vals'
+
+    local vals ""
     foreach yr of local years {
-        replace Value_`yr' = `share_iwp_hh`ht'_`yr'' in `row'
+        local vals "`vals' (`iwpre_ga_hh`ht'_`yr'')"
     }
-    local row = `row' + 1
-    
-    replace Variable = "Number workers" in `row'
+    post `p' ("Avg IWP Gap Pre Annual (€)") `vals'
+
+    local vals ""
     foreach yr of local years {
-        replace Value_`yr' = `n_workers_hh`ht'_`yr'' in `row'
+        local vals "`vals' (`=(`iwpre_ga_hh`ht'_`yr''/12)')"
     }
-    local row = `row' + 1
-    
-    replace Variable = "Number IWP" in `row'
+    post `p' ("Avg IWP Gap Pre Monthly (€)") `vals'
+
+    local vals ""
     foreach yr of local years {
-        replace Value_`yr' = `n_iwp_hh`ht'_`yr'' in `row'
+        local vals "`vals' (`mon_hh`ht'_`yr'')"
     }
-    local row = `row' + 1
-    
-    replace Variable = "Avg months worked" in `row'
+    post `p' ("Avg Months Worked") `vals'
+
+    post `p' ("") `missvals'
+
+    local vals ""
     foreach yr of local years {
-        replace Value_`yr' = `months_hh`ht'_`yr'' in `row'
+        local vals "`vals' (`=(`plm_hh`ht'_`yr''*12)')"
     }
-    local row = `row' + 1
-    
-    replace Variable = "Avg IWP gap (Euro, annual)" in `row'
+    post `p' ("Poverty Threshold Annual (€)") `vals'
+
+    local vals ""
     foreach yr of local years {
-        replace Value_`yr' = `iwp_gap_abs_hh`ht'_`yr'' in `row'
+        local vals "`vals' (`plm_hh`ht'_`yr'')"
     }
-    local row = `row' + 1
-    
-    replace Variable = "Avg IWP gap (Euro, monthly)" in `row'
-    foreach yr of local years {
-        replace Value_`yr' = `iwp_gap_abs_month_hh`ht'_`yr'' in `row'
-    }
-    local row = `row' + 1
-    
-    replace Variable = "Avg IWP gap (Percent)" in `row'
-    foreach yr of local years {
-        replace Value_`yr' = `iwp_gap_rel_hh`ht'_`yr'' in `row'
-    }
-    local row = `row' + 1
-    
-    * Threshold Section (household-specific, rounded)
-    replace Variable = "Poverty line HH-Typ (Euro, annual)" in `row'
-    foreach yr of local years {
-        replace Value_`yr' = `pov_line_hh`ht'_`yr'' in `row'
-    }
-    local row = `row' + 1
-    
-    replace Variable = "Poverty line HH-Typ (Euro, monthly)" in `row'
-    foreach yr of local years {
-        replace Value_`yr' = `pov_line_month_hh`ht'_`yr'' in `row'
-    }
-    local row = `row' + 1
+    post `p' ("Poverty Threshold Monthly (€)") `vals'
+
+    post `p' ("") `missvals'
 }
 
-*===============================================================================
-* NEU: HOUSEHOLD TYPE DECOMPOSITION - SEPARATE SHEETS, JAHRE UNTEREINANDER
-*===============================================================================
+postclose `p'
 
-* Household type labels for sheet names (ohne Leerzeichen/Sonderzeichen)
-local hh_label_1 "1_Erwachsener"
-local hh_label_2 "1_Erw_1_Kind"
-local hh_label_3 "1_Erw_2plus_Kinder"
-local hh_label_4 "2_Erwachsene"
-local hh_label_5 "2_Erw_1_Kind"
-local hh_label_6 "2_Erw_2_Kinder"
-local hh_label_7 "2_Erw_3plus_Kinder"
-local hh_label_8 "3plus_Erwachsene"
-local hh_label_9 "3plus_Erw_Kinder"
+use `outxlsx', clear
 
-* OECD weights
-local hh_weight_1 "1.0"
-local hh_weight_2 "1.3"
-local hh_weight_3 ">=1.6"
-local hh_weight_4 "1.5"
-local hh_weight_5 "1.8"
-local hh_weight_6 "2.1"
-local hh_weight_7 ">=2.4"
-local hh_weight_8 ">=2.0"
-local hh_weight_9 "variabel"
-
-* Loop through household types 1-9 (ohne Sonstige) and create separate sheet for each
-forvalues ht = 1/9 {
-    
-    preserve
-    clear
-    
-    * Count years
-    local n_years : word count `years'
-    set obs `n_years'
-    
-    * Create variables
-    gen Jahr = .
-    gen double Share_Total_Pct = .
-    gen double AROP_Rate = .
-    gen double Share_AROP_Pct = .
-    gen double N_Gesamt = .
-    gen double N_Arm = .
-    gen double AROP_Gap_Jahr = .
-    gen double AROP_Gap_Monat = .
-    gen double AROP_Gap_Prozent = .
-    gen double IWP_Rate = .
-    gen double Share_IWP_Pct = .
-    gen double N_Worker = .
-    gen double N_IWP = .
-    gen double Avg_Monate = .
-    gen double IWP_Gap_Jahr = .
-    gen double IWP_Gap_Monat = .
-    gen double IWP_Gap_Prozent = .
-    gen double Schwelle_Jahr = .
-    gen double Schwelle_Monat = .
-    
-    * Fill in data
-    local row = 1
-    foreach yr of local years {
-        replace Jahr = `yr' in `row'
-        replace Share_Total_Pct = `share_total_hh`ht'_`yr'' in `row'
-        replace AROP_Rate = `arop_rate_hh`ht'_`yr'' in `row'
-        replace Share_AROP_Pct = `share_arop_hh`ht'_`yr'' in `row'
-        replace N_Gesamt = `n_total_hh`ht'_`yr'' in `row'
-        replace N_Arm = `n_arop_hh`ht'_`yr'' in `row'
-        replace AROP_Gap_Jahr = `arop_gap_abs_hh`ht'_`yr'' in `row'
-        replace AROP_Gap_Monat = `arop_gap_abs_month_hh`ht'_`yr'' in `row'
-        replace AROP_Gap_Prozent = `arop_gap_rel_hh`ht'_`yr'' in `row'
-        replace IWP_Rate = `iwp_rate_hh`ht'_`yr'' in `row'
-        replace Share_IWP_Pct = `share_iwp_hh`ht'_`yr'' in `row'
-        replace N_Worker = `n_workers_hh`ht'_`yr'' in `row'
-        replace N_IWP = `n_iwp_hh`ht'_`yr'' in `row'
-        replace Avg_Monate = `months_hh`ht'_`yr'' in `row'
-        replace IWP_Gap_Jahr = `iwp_gap_abs_hh`ht'_`yr'' in `row'
-        replace IWP_Gap_Monat = `iwp_gap_abs_month_hh`ht'_`yr'' in `row'
-        replace IWP_Gap_Prozent = `iwp_gap_rel_hh`ht'_`yr'' in `row'
-        replace Schwelle_Jahr = `pov_line_hh`ht'_`yr'' in `row'
-        replace Schwelle_Monat = `pov_line_month_hh`ht'_`yr'' in `row'
-        local row = `row' + 1
-    }
-    
-    * Format
-    format Jahr %4.0f
-    format Share_Total_Pct Share_AROP_Pct Share_IWP_Pct AROP_Rate IWP_Rate AROP_Gap_Prozent IWP_Gap_Prozent Avg_Monate %6.2f
-    format N_Gesamt N_Arm N_Worker N_IWP Schwelle_Jahr %12.0f
-    format AROP_Gap_Jahr AROP_Gap_Monat IWP_Gap_Jahr IWP_Gap_Monat Schwelle_Monat %10.0f
-    
-    * Export to sheet
-    if `ht' == 1 {
-        export excel "$output/Poverty_HH_Decomposed.xlsx", replace sheet("`hh_label_`ht''") firstrow(variables)
-    }
-    else {
-        export excel "$output/Poverty_HH_Decomposed.xlsx", sheetmodify sheet("`hh_label_`ht''") firstrow(variables)
-    }
-    
-    di "Sheet `hh_label_`ht'' (Gewicht: `hh_weight_`ht'') created"
-    
-    restore
-}
-
-* Keep non-empty rows
-keep if Variable != ""
-
-* Format all numeric variables
 foreach yr of local years {
     format Value_`yr' %15.2f
 }
 
 capture mkdir "$output"
+export excel "$output/ALL_POV_Small_PreTransfer_SILC.xlsx", replace sheet("Combined_PrePost") firstrow(variables)
 
-export excel "$output/ALL_POV_IND_SILC_ORGIN.xlsx", replace sheet("Combined_Poverty") firstrow(variables)
-
-di as result "File saved successfully!"
-
-restore
-
-*===============================================================================
-* ZUSÄTZLICH: Kompakt-Übersicht alle Haushaltstypen (Jahre untereinander)
-*===============================================================================
-di _n "=== Creating compact overview Excel output ===" _n
-
-preserve
-
-clear
-
-* 9 HH types x 10 years = 90 rows + headers
-set obs 100
-
-gen str40 Haushaltstyp = ""
-gen str10 OECD_Gewicht = ""
-gen Jahr = .
-gen double Share_Total_Pct = .
-gen double AROP_Rate = .
-gen double Share_AROP_Pct = .
-gen double IWP_Rate = .
-gen double Share_IWP_Pct = .
-gen double Schwelle_Jahr = .
-gen double Schwelle_Monat = .
-gen double N_Bevoelkerung = .
-
-local hh_label_1 "1 Erwachsener"
-local hh_label_2 "1 Erwachsener + 1 Kind"
-local hh_label_3 "1 Erwachsener + 2+ Kinder"
-local hh_label_4 "2 Erwachsene"
-local hh_label_5 "2 Erwachsene + 1 Kind"
-local hh_label_6 "2 Erwachsene + 2 Kinder"
-local hh_label_7 "2 Erwachsene + 3+ Kinder"
-local hh_label_8 "3+ Erwachsene"
-local hh_label_9 "3+ Erwachsene mit Kindern"
-
-local hh_weight_1 "1.0"
-local hh_weight_2 "1.3"
-local hh_weight_3 ">=1.6"
-local hh_weight_4 "1.5"
-local hh_weight_5 "1.8"
-local hh_weight_6 "2.1"
-local hh_weight_7 ">=2.4"
-local hh_weight_8 ">=2.0"
-local hh_weight_9 "variabel"
-
-local row = 1
-
-* Loop through household types 1-9
-forvalues ht = 1/9 {
-    foreach yr of local years {
-        replace Haushaltstyp = "`hh_label_`ht''" in `row'
-        replace OECD_Gewicht = "`hh_weight_`ht''" in `row'
-        replace Jahr = `yr' in `row'
-        replace Share_Total_Pct = `share_total_hh`ht'_`yr'' in `row'
-        replace AROP_Rate = `arop_rate_hh`ht'_`yr'' in `row'
-        replace Share_AROP_Pct = `share_arop_hh`ht'_`yr'' in `row'
-        replace IWP_Rate = `iwp_rate_hh`ht'_`yr'' in `row'
-        replace Share_IWP_Pct = `share_iwp_hh`ht'_`yr'' in `row'
-        replace Schwelle_Jahr = `pov_line_hh`ht'_`yr'' in `row'
-        replace Schwelle_Monat = `pov_line_month_hh`ht'_`yr'' in `row'
-        replace N_Bevoelkerung = `n_total_hh`ht'_`yr'' in `row'
-        local row = `row' + 1
-    }
-}
-
-keep if Jahr != .
-
-* Format
-format Jahr %4.0f
-format Share_Total_Pct Share_AROP_Pct Share_IWP_Pct AROP_Rate IWP_Rate %6.2f
-format Schwelle_Jahr N_Bevoelkerung %12.0f
-format Schwelle_Monat %10.0f
-
-export excel "$output/Poverty_by_HouseholdType_SILC.xlsx", replace sheet("Uebersicht") firstrow(variables)
-
-di as result "Compact overview file saved successfully!"
-
-restore
-
-*===============================================================================
-* FINAL OUTPUT
-*===============================================================================
-di _n "==============================================================================="
-di "COMBINED POVERTY ANALYSIS COMPLETE - EU-SILC 2015-2024"
-di "MIT DECOMPOSITION NACH HAUSHALTSTYP (OECD-Äquivalenzgewichte)"
-di "==============================================================================="
-di "Output files:"
-di " - ALL_POV_IND_SILC_ORGIN.dta (microdata)"
-di " - ALL_POV_IND_SILC_ORGIN.xlsx (Overall AROP + IWP)"
-di " - Poverty_HH_Decomposed.xlsx (9 Sheets, je ein HH-Typ, Jahre untereinander)"
-di " - Poverty_by_HouseholdType_SILC.xlsx (Kompakt-Übersicht)"
-di "==============================================================================="
-di ""
-di "OECD Modifizierte Äquivalenzskala:"
-di "  - Erste erwachsene Person:         1.0"
-di "  - Jede weitere Person (ab 14 J.):  0.5"
-di "  - Jedes Kind (unter 14 J.):        0.3"
-di ""
-di "Armutsschwellen auf ganze Euro gerundet!"
-di ""
-di "Beispiel-Gewichte:"
-di "  - 1 Erwachsener:              1.0"
-di "  - 1 Erwachsener + 1 Kind:     1.3"
-di "  - 2 Erwachsene:               1.5"
-di "  - 2 Erwachsene + 1 Kind:      1.8"
-di "  - 2 Erwachsene + 2 Kinder:    2.1"
-di "  - 2 Erwachsene + 3 Kinder:    2.4"
-di "==============================================================================="
-
-di _n "Analysis complete! Check Excel files for results."
-di _n "==============================================================================="
-
+di as result "File saved: ALL_POV_Small_PreTransfer_SILC.xlsx sheet Combined_PrePost"
