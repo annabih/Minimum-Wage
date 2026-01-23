@@ -11,7 +11,7 @@ set more off
 *** Define globals
 *************************************************
 global input_org "D:\EUROMOD\InWorkPoverty\EUROMOD_RELEASES_J1.86+\Output_Org"
-global input_reform "D:\EUROMOD\InWorkPoverty\EUROMOD_RELEASES_J1.86+\Output_V1"
+global input_reform "D:\EUROMOD\InWorkPoverty\EUROMOD_RELEASES_J1.86+\Output_P1"
 global output "D:\EUROMOD\InWorkPoverty\EUROMOD_RELEASES_J1.86+\Data_Prep"
 
 *************************************************
