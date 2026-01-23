@@ -448,16 +448,6 @@ foreach yr of local years {
 }
 local row = `row' + 1
 
-replace Variable = "Avg Poverty Gap Post Monthly (€)" in `row'
-foreach yr of local years {
-    replace Value_`yr'_O = `argam_`yr'_0' in `row'
-    replace Value_`yr'_P = `argam_`yr'_1' in `row'
-    if `argam_`yr'_0' != 0 & !missing(`argam_`yr'_0') {
-        replace Value_`yr'_ChPc = ((`argam_`yr'_1' - `argam_`yr'_0') / `argam_`yr'_0') * 100 in `row'
-    }
-}
-local row = `row' + 1
-
 replace Variable = "Number of Employed" in `row'
 foreach yr of local years {
     replace Value_`yr'_O = `nwrk_`yr'_0' in `row'
@@ -606,16 +596,6 @@ forvalues ht = 1/10 {
         replace Value_`yr'_P = `arpre_gam_hh`ht'_`yr'_1' in `row'
         if `arpre_gam_hh`ht'_`yr'_0' != 0 & !missing(`arpre_gam_hh`ht'_`yr'_0') {
             replace Value_`yr'_ChPc = ((`arpre_gam_hh`ht'_`yr'_1' - `arpre_gam_hh`ht'_`yr'_0') / `arpre_gam_hh`ht'_`yr'_0') * 100 in `row'
-        }
-    }
-    local row = `row' + 1
-
-    replace Variable = "Avg Poverty Gap Post Monthly (€)" in `row'
-    foreach yr of local years {
-        replace Value_`yr'_O = `argam_hh`ht'_`yr'_0' in `row'
-        replace Value_`yr'_P = `argam_hh`ht'_`yr'_1' in `row'
-        if `argam_hh`ht'_`yr'_0' != 0 & !missing(`argam_hh`ht'_`yr'_0') {
-            replace Value_`yr'_ChPc = ((`argam_hh`ht'_`yr'_1' - `argam_hh`ht'_`yr'_0') / `argam_hh`ht'_`yr'_0') * 100 in `row'
         }
     }
     local row = `row' + 1
