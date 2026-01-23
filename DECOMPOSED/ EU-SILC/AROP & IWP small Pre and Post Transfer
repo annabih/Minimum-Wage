@@ -1,6 +1,6 @@
-*******************************************************************************************************************************************************************************************
+/*******************************************************************************************************************************************************************************************
 *** Titel: Combined Poverty Analysis with Pre Transfer Comparison and Household Decomposition EU SILC Austria 2015 2024
-*** Date: 19.01.2026
+*** Date: 23.01.2026
 *** Aim: Combined AROP and IWP calculation with pre transfer HY023 comparison and household type decomposition
 *** Method: Poverty threshold is based on post transfer HX090 median, applied to post transfer HX090 and pre transfer HY023 based equivalised incomes
 *** Pre Transfer: HY023 is household disposable income before all social transfers, not equivalised, divided by OECD equivalence weight
@@ -514,8 +514,8 @@ foreach yr of local years {
     local meantr_`yr' = r(mean)
     local meantrm_`yr' = r(mean) / 12
 
-    di "Year `yr': PRE AROP=" %5.2f `arpre_`yr'' "% POST AROP=" %5.2f `ar_`yr'' "% Reduction pct=" %5.2f `arrpc_`yr'' 
-    di "         PRE IWP=" %5.2f `iwpre_`yr'' "% POST IWP=" %5.2f `iw_`yr'' "% Reduction pct=" %5.2f `iwrpc_`yr'' 
+    di "Year `yr': PRE AROP=" %5.2f `arpre_`yr'' "% POST AROP=" %5.2f `ar_`yr'' "% Reduction pct=" %5.2f `arrpc_`yr''
+    di "         PRE IWP=" %5.2f `iwpre_`yr'' "% POST IWP=" %5.2f `iw_`yr'' "% Reduction pct=" %5.2f `iwrpc_`yr''
 }
 
 *===============================================================================
@@ -571,7 +571,9 @@ foreach yr of local years {
             local nar_hh`ht'_`yr' = .
             local narpre_hh`ht'_`yr' = .
             local arga_hh`ht'_`yr' = .
+            local argam_hh`ht'_`yr' = .
             local arpre_ga_hh`ht'_`yr' = .
+            local arpre_gam_hh`ht'_`yr' = .
             local iw_hh`ht'_`yr' = .
             local iwpre_hh`ht'_`yr' = .
             local iwrpp_hh`ht'_`yr' = .
@@ -581,7 +583,10 @@ foreach yr of local years {
             local nwrk_hh`ht'_`yr' = .
             local niw_hh`ht'_`yr' = .
             local niwpre_hh`ht'_`yr' = .
+            local iwpre_ga_hh`ht'_`yr' = .
+            local iwpre_gam_hh`ht'_`yr' = .
             local mon_hh`ht'_`yr' = .
+            local pl_hh`ht'_`yr' = .
             local plm_hh`ht'_`yr' = .
             continue
         }
@@ -611,9 +616,11 @@ foreach yr of local years {
         if r(N) > 0 {
             sum ar_ga [aw=dwt] if year == `yr' & hh_type == `ht' & arop == 1
             local arga_hh`ht'_`yr' = r(mean)
+            local argam_hh`ht'_`yr' = r(mean) / 12
         }
         else {
             local arga_hh`ht'_`yr' = .
+            local argam_hh`ht'_`yr' = .
         }
 
         * AROP pre
@@ -636,9 +643,11 @@ foreach yr of local years {
         if r(N) > 0 {
             sum arpre_ga [aw=dwt] if year == `yr' & hh_type == `ht' & arop_pre == 1
             local arpre_ga_hh`ht'_`yr' = r(mean)
+            local arpre_gam_hh`ht'_`yr' = r(mean) / 12
         }
         else {
             local arpre_ga_hh`ht'_`yr' = .
+            local arpre_gam_hh`ht'_`yr' = .
         }
 
         * AROP reduction
@@ -707,6 +716,17 @@ foreach yr of local years {
             else {
                 local iwrpc_hh`ht'_`yr' = .
             }
+
+            quietly count if year == `yr' & hh_type == `ht' & inwork_poor_pre == 1
+            if r(N) > 0 {
+                sum iwpre_ga [aw=dwt] if year == `yr' & hh_type == `ht' & inwork_poor_pre == 1
+                local iwpre_ga_hh`ht'_`yr' = r(mean)
+                local iwpre_gam_hh`ht'_`yr' = r(mean) / 12
+            }
+            else {
+                local iwpre_ga_hh`ht'_`yr' = .
+                local iwpre_gam_hh`ht'_`yr' = .
+            }
         }
         else {
             local iwpre_hh`ht'_`yr' = .
@@ -714,7 +734,12 @@ foreach yr of local years {
             local shiwpre_hh`ht'_`yr' = .
             local iwrpp_hh`ht'_`yr' = .
             local iwrpc_hh`ht'_`yr' = .
+            local iwpre_ga_hh`ht'_`yr' = .
+            local iwpre_gam_hh`ht'_`yr' = .
         }
+
+        sum pov_hh if year == `yr' & hh_type == `ht', meanonly
+        local pl_hh`ht'_`yr' = r(mean)
 
         sum pov_hh_m if year == `yr' & hh_type == `ht', meanonly
         local plm_hh`ht'_`yr' = r(mean)
@@ -725,7 +750,7 @@ foreach yr of local years {
 
 *===============================================================================
 * CREATE ONE COMBINED EXCEL OUTPUT
-* One file, one sheet: OVERVIEW first, then HH type decomposition with PRE POST and changes
+* One file, one sheet: OVERVIEW first, then HH type decomposition
 *===============================================================================
 di _n "=== Creating combined Excel output (Overview + Household breakdown) ===" _n
 
@@ -743,27 +768,14 @@ local row = 1
 
 *-------------------------------------------------------------------------------
 * OVERVIEW BLOCK (TOTAL POPULATION)
+* required variables, exact order
 *-------------------------------------------------------------------------------
 replace Variable = "=== OVERVIEW TOTAL POPULATION ===" in `row'
 local row = `row' + 2
 
-replace Variable = "Total population" in `row'
-foreach yr of local years {
-    replace Value_`yr' = `nt_`yr'' in `row'
-    format Value_`yr' %15.0f
-}
-local row = `row' + 1
-
 replace Variable = "AROP Rate Pre Transfer (%)" in `row'
 foreach yr of local years {
     replace Value_`yr' = `arpre_`yr'' in `row'
-}
-local row = `row' + 1
-
-
-replace Variable = "AROP Reduction (% of Pre)" in `row'
-foreach yr of local years {
-    replace Value_`yr' = `arrpc_`yr'' in `row'
 }
 local row = `row' + 1
 
@@ -780,10 +792,15 @@ foreach yr of local years {
 }
 local row = `row' + 1
 
-
 replace Variable = "Avg Poverty Gap Pre Monthly (€)" in `row'
 foreach yr of local years {
     replace Value_`yr' = `arpre_gam_`yr'' in `row'
+}
+local row = `row' + 1
+
+replace Variable = "Avg Poverty Gap Post Monthly (€)" in `row'
+foreach yr of local years {
+    replace Value_`yr' = `argam_`yr'' in `row'
 }
 local row = `row' + 1
 
@@ -807,7 +824,6 @@ foreach yr of local years {
 }
 local row = `row' + 1
 
-
 replace Variable = "Avg IWP Gap Pre Annual (€)" in `row'
 foreach yr of local years {
     replace Value_`yr' = `iwpre_ga_`yr'' in `row'
@@ -824,7 +840,7 @@ replace Variable = "Avg Months Worked" in `row'
 foreach yr of local years {
     replace Value_`yr' = `mon_`yr'' in `row'
 }
-local row = `row' + 2
+local row = `row' + 1
 
 replace Variable = "Poverty Threshold Annual (€)" in `row'
 foreach yr of local years {
@@ -836,12 +852,13 @@ local row = `row' + 1
 replace Variable = "Poverty Threshold Monthly (€)" in `row'
 foreach yr of local years {
     replace Value_`yr' = `plm_`yr'' in `row'
-    format Value_`yr' %15.0f
+    format Value_`yr' %15.1f
 }
 local row = `row' + 3
 
 *-------------------------------------------------------------------------------
 * HOUSEHOLD TYPE DECOMPOSITION BLOCK
+* required variables, exact order
 *-------------------------------------------------------------------------------
 replace Variable = "=== POVERTY BY HOUSEHOLD TYPE PRE POST AND CHANGES ===" in `row'
 local row = `row' + 2
@@ -862,66 +879,66 @@ forvalues ht = 1/10 {
     replace Variable = "=== HH Typ `ht' `hh_label_`ht'' ===" in `row'
     local row = `row' + 1
 
-    replace Variable = "Total population" in `row'
-    foreach yr of local years {
-        replace Value_`yr' = `ntt_hh`ht'_`yr'' in `row'
-    }
-    local row = `row' + 1
-
-    replace Variable = "Number People AROP (Pre Transfer)d" in `row'
-    foreach yr of local years {
-        replace Value_`yr' = `narpre_hh`ht'_`yr'' in `row'
-    }
-    local row = `row' + 1
-
-    replace Variable = "AROP Share of Total Population (%)" in `row'
-    foreach yr of local years {
-        replace Value_`yr' = `sht_hh`ht'_`yr'' in `row'
-    }
-    local row = `row' + 1
-
     replace Variable = "AROP Rate Pre Transfer (%)" in `row'
     foreach yr of local years {
         replace Value_`yr' = `arpre_hh`ht'_`yr'' in `row'
     }
     local row = `row' + 1
 
-    replace Variable = "Share among AROP (Pre Transfer %)" in `row'
+    replace Variable = "Number People AROP (Pre Transfer)" in `row'
     foreach yr of local years {
-        replace Value_`yr' = `sharpre_hh`ht'_`yr'' in `row'
+        replace Value_`yr' = `narpre_hh`ht'_`yr'' in `row'
+        format Value_`yr' %15.0f
     }
     local row = `row' + 1
 
-    replace Variable = "Avg AROP Gap Pre Annual (€)" in `row'
+    replace Variable = "Avg Poverty Gap Pre Annual (€)" in `row'
     foreach yr of local years {
         replace Value_`yr' = `arpre_ga_hh`ht'_`yr'' in `row'
     }
     local row = `row' + 1
 
-    
+    replace Variable = "Avg Poverty Gap Pre Monthly (€)" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `arpre_gam_hh`ht'_`yr'' in `row'
+    }
+    local row = `row' + 1
+
+    replace Variable = "Avg Poverty Gap Post Monthly (€)" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `argam_hh`ht'_`yr'' in `row'
+    }
+    local row = `row' + 1
+
+    replace Variable = "Number of Employed" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `nwrk_hh`ht'_`yr'' in `row'
+        format Value_`yr' %15.0f
+    }
+    local row = `row' + 1
+
     replace Variable = "IWP Rate Pre Transfer (%)" in `row'
     foreach yr of local years {
         replace Value_`yr' = `iwpre_hh`ht'_`yr'' in `row'
     }
     local row = `row' + 1
 
-   
-    replace Variable = "Share of Employees IWP Pre Transfer (%)" in `row'
-    foreach yr of local years {
-        replace Value_`yr' = `shiwpre_hh`ht'_`yr'' in `row'
-    }
-    local row = `row' + 1
-
- 
-    replace Variable = "Number od Employed" in `row'
-    foreach yr of local years {
-        replace Value_`yr' = `nwrk_hh`ht'_`yr'' in `row'
-    }
-    local row = `row' + 1
-
     replace Variable = "Number Employees IWP (Pre Transfer)" in `row'
     foreach yr of local years {
         replace Value_`yr' = `niwpre_hh`ht'_`yr'' in `row'
+        format Value_`yr' %15.0f
+    }
+    local row = `row' + 1
+
+    replace Variable = "Avg IWP Gap Pre Annual (€)" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `iwpre_ga_hh`ht'_`yr'' in `row'
+    }
+    local row = `row' + 1
+
+    replace Variable = "Avg IWP Gap Pre Monthly (€)" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `iwpre_gam_hh`ht'_`yr'' in `row'
     }
     local row = `row' + 1
 
@@ -931,9 +948,17 @@ forvalues ht = 1/10 {
     }
     local row = `row' + 1
 
+    replace Variable = "Poverty Threshold Annual (€)" in `row'
+    foreach yr of local years {
+        replace Value_`yr' = `pl_hh`ht'_`yr'' in `row'
+        format Value_`yr' %15.0f
+    }
+    local row = `row' + 1
+
     replace Variable = "Poverty Threshold Monthly (€)" in `row'
     foreach yr of local years {
         replace Value_`yr' = `plm_hh`ht'_`yr'' in `row'
+        format Value_`yr' %15.1f
     }
     local row = `row' + 2
 }
@@ -958,5 +983,5 @@ di _n "=========================================================================
 di "COMBINED POVERTY ANALYSIS WITH OVERVIEW AND HOUSEHOLD DECOMPOSITION COMPLETE"
 di "Output files:"
 di "  ALL_POV_IND_SILC_PreTransfer.dta"
-di "  ALL_POV_PreTransfer_SILC.xlsx"
+di "  ALL_POV_PreTransfer_Small_SILC.xlsx"
 di "===============================================================================" 
