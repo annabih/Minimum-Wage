@@ -1,0 +1,107 @@
+*******************************************************************************************************************************************************************************************
+*** Titel: Complete EUROMOD Pre-Post Analysis Data Preparation
+*** Date: 20.01.2026
+*** Aim: Create single panel dataset with original and reform scenarios
+*******************************************************************************************************************************************************************************************
+
+clear all
+set more off
+
+*************************************************
+*** Define globals
+*************************************************
+global input_org "D:\EUROMOD\InWorkPoverty\EUROMOD_RELEASES_J1.86+\Output_Org"
+global input_reform "D:\EUROMOD\InWorkPoverty\EUROMOD_RELEASES_J1.86+\Output_V1"
+global output "D:\EUROMOD\InWorkPoverty\EUROMOD_RELEASES_J1.86+\Data_Prep"
+
+*************************************************
+*** STEP 1: Append Original/Baseline Data
+*************************************************
+di as text _n "STEP 1: Processing original (baseline) data..."
+
+* Import first file
+import delimited "$input_org/at_2017_std.txt", clear stringcols(_all)
+gen year = 2017
+tempfile orgdata
+save `orgdata', replace
+
+* Append 2018-2022
+forvalues y = 2018/2022 {
+    import delimited "$input_org/at_`y'_std.txt", clear stringcols(_all)
+    gen year = `y'
+    append using `orgdata'
+    save `orgdata', replace
+}
+
+* Kommas durch Punkte ersetzen
+foreach var of varlist _all {
+    capture confirm string variable `var'
+    if !_rc {
+        replace `var' = subinstr(`var', ",", ".", .)
+    }
+}
+
+* Destring key variables
+destring idhh idperson year, replace
+
+* Create policy indicator
+gen policy = 0
+label define policy_lbl 0 "Original" 1 "Reform"
+label values policy policy_lbl
+
+* Save temporary original data
+tempfile original_full
+save `original_full', replace
+
+di as result "Original data complete: " _N " observations"
+tab year
+
+*************************************************
+*** STEP 2: Append Reform Data
+*************************************************
+di as text _n "STEP 2: Processing reform scenario data..."
+
+* Import first file
+import delimited "$input_reform/at_2017.txt", clear stringcols(_all)
+gen year = 2017
+tempfile reformdata
+save `reformdata', replace
+
+* Append 2018-2022
+forvalues y = 2018/2022 {
+    import delimited "$input_reform/at_`y'.txt", clear stringcols(_all)
+    gen year = `y'
+    append using `reformdata'
+    save `reformdata', replace
+}
+
+* Kommas durch Punkte ersetzen
+foreach var of varlist _all {
+    capture confirm string variable `var'
+    if !_rc {
+        replace `var' = subinstr(`var', ",", ".", .)
+    }
+}
+
+* Destring key variables
+destring idhh idperson year, replace
+
+* Create policy indicator
+gen policy = 1
+label values policy policy_lbl
+
+di as result "Reform data complete: " _N " observations"
+tab year
+
+*************************************************
+*** STEP 3: Combine Original and Reform Data
+*************************************************
+di as text _n "STEP 3: Combining datasets..."
+
+append using `original_full'
+
+* Sort for panel structure
+sort idhh idperson year policy
+
+* Save final combined dataset
+save "$output/EUROMOD_P1_PRE_POST.dta", replace
