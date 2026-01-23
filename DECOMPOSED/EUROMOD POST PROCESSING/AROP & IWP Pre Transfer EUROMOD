@@ -14,7 +14,7 @@
 clear all
 set more off
 
-use "D:\EUROMOD\InWorkPoverty\EUROMOD_RELEASES_J1.86+\Data_Prep\EUROMOD_Pre_Post_Policy_2017_2022.dta", clear
+use "D:\EUROMOD\InWorkPoverty\EUROMOD_RELEASES_J1.86+\Data_Prep\EUROMOD_P1_PRE_POST.dta", clear
 global output "D:\InWorkPoverty_SILC"
 
 local years "2017 2018 2019 2020 2021 2022"
