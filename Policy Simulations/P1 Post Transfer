@@ -331,7 +331,7 @@ di _n "=======================================================" _n
 di "PART 2: CALCULATING EUROMOD POST TRANSFER POLICY CHANGES (%)" _n
 di "=======================================================" _n
 
-use "D:\EUROMOD\InWorkPoverty\EUROMOD_RELEASES_J1.86+\Data_Prep\EUROMOD_Pre_Post_Policy_2017_2022.dta", clear
+use "D:\EUROMOD\InWorkPoverty\EUROMOD_RELEASES_J1.86+\Data_Prep\EUROMOD_P1_PRE_POST.dta", clear
 
 * Destring
 local numeric_vars "dag dgn dwt liwmy ils_dispy ils_ben ils_pen idhh year policy"
