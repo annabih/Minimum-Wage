@@ -64,7 +64,7 @@ append using `inputdata'
 sort idhh idperson year policy
 
 * Save combined dataset
-save "$output/EUROMOD_Pre_Post_Policy_2017_2022.dta", replace
+save "$output/EUROMOD_P1_PRE_POST.dta", replace
 
 di "Complete! Total observations: " _N
 tab year policy
