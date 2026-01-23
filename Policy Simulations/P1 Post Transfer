@@ -976,11 +976,11 @@ foreach yr of local years {
 }
 
 capture mkdir "$output"
-export excel "$output\Combined_Policy_Simulation_POST.xlsx", replace sheet("Policy_Simulation_POST") firstrow(variables)
+export excel "$output\Policy_Simulation_P1_POST.xlsx", replace sheet("Policy_Simulation_POST") firstrow(variables)
 
 di _n "==============================================================================="
 di "COMBINED POLICY SIMULATION POST TRANSFER OUTPUT COMPLETE"
-di "Output file: Combined_Policy_Simulation_POST.xlsx"
+di "Output file: Policy_Simulation_P1_POST.xlsx"
 di "Structure: For each year 2017-2022: Org (SILC baseline POST), ChPc (% change), P1 (simulated POST)"
 di "Formula P1: P1 = Org * (1 + ChPc/100)"
 di "NOTE: Equivalised thresholds same for all HHs; Absolute HH thresholds = equivalised * OECD weight"
