@@ -834,7 +834,7 @@ tempfile pre_sheet
 save `pre_sheet', replace
 
 capture mkdir "$output"
-export excel "$output\ALL_POV_PrePost__P1_EUROMOD.xlsx", replace sheet("Pre-Transfer") firstrow(variables)
+export excel "$output\ALL_POV_PrePost_P1_EUROMOD.xlsx", replace sheet("Pre-Transfer") firstrow(variables)
 
 restore
 
