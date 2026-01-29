@@ -157,7 +157,7 @@ gen double iw_gap_a    = iw_gap_m * 12
 gen byte iwlifted = (inwork_poor_pre == 1 & inwork_poor == 0)
 
 capture mkdir "$output"
-save "$output\ALL_POV_IND_EUROMOD.dta", replace
+save "$output\ALL_POV_IND_P1_EUROMOD.dta", replace
 
 *===============================================================================
 * CALCULATE STATISTICS - PRE-TRANSFER
