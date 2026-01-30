@@ -1,6 +1,6 @@
 *******************************************************************************************************************************************************************************************
 *** Title: Poverty Analysis by Personal Deprivation Indicators - EU-SILC Austria 2017-2024
-*** Date: 29.01.2026
+*** Date: 30.01.2026
 *******************************************************************************************************************************************************************************************
 
 clear all
@@ -170,12 +170,9 @@ if _rc == 0 {
     gen sex = PB150
     label define sex_lbl 1 "Male" 2 "Female"
     label values sex sex_lbl
-    di "Sex variable created successfully"
-    tab sex, missing
 }
 else {
     gen sex = .
-    di as error "WARNING: PB150 not found, sex variable set to missing"
 }
 
 * SAVE ORIGINAL DATA
@@ -191,35 +188,31 @@ foreach yr of local years {
     quietly count if year == `yr'
     if r(N) == 0 continue
     
-    * Total population (reference)
     sum dwt if year == `yr'
     local ref_total_pop_`yr' = r(sum)
     
-    * Total AROP (reference)
     sum dwt if year == `yr' & arop == 1
     local ref_total_arop_`yr' = r(sum)
     
-    * Total Workers (reference)
     sum dwt if year == `yr' & worker == 1
     local ref_total_workers_`yr' = r(sum)
     
-    * Total IWP (reference)
     sum dwt if year == `yr' & worker == 1 & inwork_poor == 1
     local ref_total_iwp_`yr' = r(sum)
 }
 
 *===============================================================================
-* ANALYZE EACH DEPRIVATION INDICATOR
+* ANALYZE ALL DEPRIVATION INDICATORS - COMBINED IN ONE SHEET
 *===============================================================================
 
 local dep_vars "dep_clothes dep_shoes dep_social dep_leisure dep_pocket dep_internet"
 
-local label_dep_clothes "Clothes"
-local label_dep_shoes "Shoes"
-local label_dep_social "Social_Activity"
-local label_dep_leisure "Leisure_Activity"
-local label_dep_pocket "Pocket_Money"
-local label_dep_internet "Internet"
+local label_dep_clothes "CLOTHES"
+local label_dep_shoes "SHOES"
+local label_dep_social "SOCIAL ACTIVITIES"
+local label_dep_leisure "LEISURE ACTIVITIES"
+local label_dep_pocket "POCKET MONEY"
+local label_dep_internet "INTERNET"
 
 local desc_dep_clothes "new clothes"
 local desc_dep_shoes "two pairs of shoes"
@@ -228,8 +221,18 @@ local desc_dep_leisure "regular leisure activity"
 local desc_dep_pocket "weekly spending money"
 local desc_dep_internet "internet connection"
 
-local sheet_num = 0
+* Create one large dataset to hold all results
+clear
+set obs 1000  // Large enough for all variables
 
+gen str100 Indicator = ""
+foreach yr of local years {
+    gen double Y`yr' = .
+}
+
+local row = 1
+
+* Loop through each deprivation variable
 foreach depvar of local dep_vars {
     
     use `original_data', clear
@@ -246,8 +249,7 @@ foreach depvar of local dep_vars {
         continue
     }
     
-    local sheet_num = `sheet_num' + 1
-    local sheet_name "`label_`depvar''"
+    local var_label "`label_`depvar''"
     
     di _n "=== Analyzing: `depvar' (`desc_`depvar'') ===" _n
     
@@ -259,7 +261,6 @@ foreach depvar of local dep_vars {
         quietly count if year == `yr' & !missing(`depvar')
         if r(N) == 0 continue
         
-        * Overall totals for THIS variable
         sum dwt if year == `yr' & !missing(`depvar')
         local total_pop_`yr' = r(sum)
         local pct_pop_`yr' = (`total_pop_`yr'' / `ref_total_pop_`yr'') * 100
@@ -281,7 +282,6 @@ foreach depvar of local dep_vars {
             local pct_iwp_`yr' = .
         }
         
-        * By category (0=can afford, 1=cannot afford)
         forvalues cat = 0/1 {
             
             quietly count if year == `yr' & `depvar' == `cat'
@@ -294,16 +294,13 @@ foreach depvar of local dep_vars {
                 continue
             }
             
-            * Share of population
             sum dwt if year == `yr' & `depvar' == `cat'
             local n_total_cat = r(sum)
             local share_total_`cat'_`yr' = (`n_total_cat' / `total_pop_`yr'') * 100
             
-            * AROP rate
             sum arop [aw=dwt] if year == `yr' & `depvar' == `cat'
             local arop_rate_`cat'_`yr' = r(mean) * 100
             
-            * Share of AROP
             sum dwt if year == `yr' & `depvar' == `cat' & arop == 1
             local n_arop_cat = r(sum)
             if `total_arop_`yr'' > 0 {
@@ -313,7 +310,6 @@ foreach depvar of local dep_vars {
                 local share_arop_`cat'_`yr' = .
             }
             
-            * IWP
             quietly count if year == `yr' & `depvar' == `cat' & worker == 1
             if r(N) > 0 {
                 sum inwork_poor [aw=dwt] if year == `yr' & `depvar' == `cat' & worker == 1
@@ -337,21 +333,18 @@ foreach depvar of local dep_vars {
     }
     
     *===========================================================================
-    * BY SEX - Initialize all locals first
+    * BY SEX
     *===========================================================================
     
-    di "Checking sex variable availability..."
     quietly count if !missing(sex)
     local has_sex = (r(N) > 0)
     
     if `has_sex' {
-        di "Sex variable available, calculating statistics by sex..."
         
         forvalues sexcat = 1/2 {
             
             foreach yr of local years {
                 
-                * Initialize all locals to missing
                 local total_pop_sex`sexcat'_`yr' = .
                 local pct_pop_sex`sexcat'_`yr' = .
                 local total_arop_sex`sexcat'_`yr' = .
@@ -369,11 +362,9 @@ foreach depvar of local dep_vars {
                     local share_iwp_sex`sexcat'_`cat'_`yr' = .
                 }
                 
-                * Now calculate if data exists
                 quietly count if year == `yr' & !missing(`depvar') & sex == `sexcat'
                 if r(N) == 0 continue
                 
-                * Totals for this sex
                 sum dwt if year == `yr' & !missing(`depvar') & sex == `sexcat'
                 local total_pop_sex`sexcat'_`yr' = r(sum)
                 local pct_pop_sex`sexcat'_`yr' = (`total_pop_sex`sexcat'_`yr'' / `ref_total_pop_`yr'') * 100
@@ -391,33 +382,25 @@ foreach depvar of local dep_vars {
                 if `ref_total_iwp_`yr'' > 0 {
                     local pct_iwp_sex`sexcat'_`yr' = (`total_iwp_sex`sexcat'_`yr'' / `ref_total_iwp_`yr'') * 100
                 }
-                else {
-                    local pct_iwp_sex`sexcat'_`yr' = .
-                }
                 
-                * By category within sex
                 forvalues cat = 0/1 {
                     
                     quietly count if year == `yr' & `depvar' == `cat' & sex == `sexcat'
                     if r(N) == 0 continue
                     
-                    * Share of population (within sex)
                     sum dwt if year == `yr' & `depvar' == `cat' & sex == `sexcat'
                     local n_total_cat = r(sum)
                     local share_total_sex`sexcat'_`cat'_`yr' = (`n_total_cat' / `total_pop_sex`sexcat'_`yr'') * 100
                     
-                    * AROP rate
                     sum arop [aw=dwt] if year == `yr' & `depvar' == `cat' & sex == `sexcat'
                     local arop_rate_sex`sexcat'_`cat'_`yr' = r(mean) * 100
                     
-                    * Share of AROP (within sex)
                     sum dwt if year == `yr' & `depvar' == `cat' & sex == `sexcat' & arop == 1
                     local n_arop_cat = r(sum)
                     if `total_arop_sex`sexcat'_`yr'' > 0 {
                         local share_arop_sex`sexcat'_`cat'_`yr' = (`n_arop_cat' / `total_arop_sex`sexcat'_`yr'') * 100
                     }
                     
-                    * IWP
                     quietly count if year == `yr' & `depvar' == `cat' & sex == `sexcat' & worker == 1
                     if r(N) > 0 {
                         sum inwork_poor [aw=dwt] if year == `yr' & `depvar' == `cat' & sex == `sexcat' & worker == 1
@@ -433,19 +416,16 @@ foreach depvar of local dep_vars {
                 }
             }
         }
-        
-        di "Sex statistics calculated successfully"
-    }
-    else {
-        di as error "WARNING: No valid sex data available"
     }
     
     *===========================================================================
-    * CREATE EXCEL SHEET
+    * ADD TO COMBINED DATASET
     *===========================================================================
+    
+    tempfile current_results
+    save `current_results', replace
     
     clear
-    
     set obs 150
     
     gen str100 Indicator = ""
@@ -453,498 +433,498 @@ foreach depvar of local dep_vars {
         gen double Y`yr' = .
     }
     
-    local row = 1
+    local r = 1
     
-    * === OVERALL COVERAGE ===
-    replace Indicator = "========================================" in `row'
-    local row = `row' + 1
-    replace Indicator = "OVERALL (ALL PERSONS)" in `row'
-    local row = `row' + 1
-    replace Indicator = "========================================" in `row'
-    local row = `row' + 1
-    replace Indicator = "" in `row'
-    local row = `row' + 1
+    * === OVERALL ===
+    replace Indicator = "=== OVERALL (ALL PERSONS): `var_label' ===" in `r'
+    local r = `r' + 1
+    replace Indicator = "" in `r'
+    local r = `r' + 1
     
-    replace Indicator = "=== SAMPLE COVERAGE ===" in `row'
-    local row = `row' + 1
-    replace Indicator = "" in `row'
-    local row = `row' + 1
+    replace Indicator = "=== SAMPLE COVERAGE ===" in `r'
+    local r = `r' + 1
+    replace Indicator = "" in `r'
+    local r = `r' + 1
     
-    replace Indicator = "N Total (persons)" in `row'
+    replace Indicator = "N Total (persons)" in `r'
     foreach yr of local years {
-        replace Y`yr' = `total_pop_`yr'' in `row'
+        replace Y`yr' = `total_pop_`yr'' in `r'
     }
-    local row = `row' + 1
+    local r = `r' + 1
     
-    replace Indicator = "N Total (% of population)" in `row'
+    replace Indicator = "N Total (% of population)" in `r'
     foreach yr of local years {
-        replace Y`yr' = `pct_pop_`yr'' in `row'
+        replace Y`yr' = `pct_pop_`yr'' in `r'
     }
-    local row = `row' + 1
+    local r = `r' + 1
     
-    replace Indicator = "" in `row'
-    local row = `row' + 1
+    replace Indicator = "" in `r'
+    local r = `r' + 1
     
-    replace Indicator = "N AROP (persons)" in `row'
+    replace Indicator = "N AROP (persons)" in `r'
     foreach yr of local years {
-        replace Y`yr' = `total_arop_`yr'' in `row'
+        replace Y`yr' = `total_arop_`yr'' in `r'
     }
-    local row = `row' + 1
+    local r = `r' + 1
     
-    replace Indicator = "N AROP (% of all AROP)" in `row'
+    replace Indicator = "N AROP (% of all AROP)" in `r'
     foreach yr of local years {
-        replace Y`yr' = `pct_arop_`yr'' in `row'
+        replace Y`yr' = `pct_arop_`yr'' in `r'
     }
-    local row = `row' + 1
+    local r = `r' + 1
     
-    replace Indicator = "" in `row'
-    local row = `row' + 1
+    replace Indicator = "" in `r'
+    local r = `r' + 1
     
-    replace Indicator = "N Workers (persons)" in `row'
+    replace Indicator = "N Workers (persons)" in `r'
     foreach yr of local years {
-        replace Y`yr' = `total_workers_`yr'' in `row'
+        replace Y`yr' = `total_workers_`yr'' in `r'
     }
-    local row = `row' + 1
+    local r = `r' + 1
     
-    replace Indicator = "N Workers (% of all workers)" in `row'
+    replace Indicator = "N Workers (% of all workers)" in `r'
     foreach yr of local years {
-        replace Y`yr' = `pct_workers_`yr'' in `row'
+        replace Y`yr' = `pct_workers_`yr'' in `r'
     }
-    local row = `row' + 1
+    local r = `r' + 1
     
-    replace Indicator = "" in `row'
-    local row = `row' + 1
+    replace Indicator = "" in `r'
+    local r = `r' + 1
     
-    replace Indicator = "N IWP (persons)" in `row'
+    replace Indicator = "N IWP (persons)" in `r'
     foreach yr of local years {
-        replace Y`yr' = `total_iwp_`yr'' in `row'
+        replace Y`yr' = `total_iwp_`yr'' in `r'
     }
-    local row = `row' + 1
+    local r = `r' + 1
     
-    replace Indicator = "N IWP (% of all IWP)" in `row'
+    replace Indicator = "N IWP (% of all IWP)" in `r'
     foreach yr of local years {
-        replace Y`yr' = `pct_iwp_`yr'' in `row'
+        replace Y`yr' = `pct_iwp_`yr'' in `r'
     }
-    local row = `row' + 1
+    local r = `r' + 1
     
-    replace Indicator = "" in `row'
-    local row = `row' + 1
-    replace Indicator = "" in `row'
-    local row = `row' + 1
+    replace Indicator = "" in `r'
+    local r = `r' + 1
+    replace Indicator = "" in `r'
+    local r = `r' + 1
     
-    * === CAN AFFORD (cat=0) ===
-    replace Indicator = "=== CAN AFFORD `desc_`depvar'' ===" in `row'
-    local row = `row' + 1
-    replace Indicator = "" in `row'
-    local row = `row' + 1
+    replace Indicator = "=== CAN AFFORD `desc_`depvar'' ===" in `r'
+    local r = `r' + 1
+    replace Indicator = "" in `r'
+    local r = `r' + 1
     
-    replace Indicator = "  Share of population (%)" in `row'
+    replace Indicator = "  Share of population (%)" in `r'
     foreach yr of local years {
-        replace Y`yr' = `share_total_0_`yr'' in `row'
+        replace Y`yr' = `share_total_0_`yr'' in `r'
     }
-    local row = `row' + 1
+    local r = `r' + 1
     
-    replace Indicator = "  AROP rate (%)" in `row'
+    replace Indicator = "  AROP rate (%)" in `r'
     foreach yr of local years {
-        replace Y`yr' = `arop_rate_0_`yr'' in `row'
+        replace Y`yr' = `arop_rate_0_`yr'' in `r'
     }
-    local row = `row' + 1
+    local r = `r' + 1
     
-    replace Indicator = "  Share of those at AROP risk (%)" in `row'
+    replace Indicator = "  Share of those at AROP risk (%)" in `r'
     foreach yr of local years {
-        replace Y`yr' = `share_arop_0_`yr'' in `row'
+        replace Y`yr' = `share_arop_0_`yr'' in `r'
     }
-    local row = `row' + 1
+    local r = `r' + 1
     
-    replace Indicator = "  IWP rate (%)" in `row'
+    replace Indicator = "  IWP rate (%)" in `r'
     foreach yr of local years {
-        replace Y`yr' = `iwp_rate_0_`yr'' in `row'
+        replace Y`yr' = `iwp_rate_0_`yr'' in `r'
     }
-    local row = `row' + 1
+    local r = `r' + 1
     
-    replace Indicator = "  Share of those at IWP risk (%)" in `row'
+    replace Indicator = "  Share of those at IWP risk (%)" in `r'
     foreach yr of local years {
-        replace Y`yr' = `share_iwp_0_`yr'' in `row'
+        replace Y`yr' = `share_iwp_0_`yr'' in `r'
     }
-    local row = `row' + 1
+    local r = `r' + 1
     
-    replace Indicator = "" in `row'
-    local row = `row' + 1
+    replace Indicator = "" in `r'
+    local r = `r' + 1
     
-    * === CANNOT AFFORD (cat=1) ===
-    replace Indicator = "=== CANNOT AFFORD `desc_`depvar'' ===" in `row'
-    local row = `row' + 1
-    replace Indicator = "" in `row'
-    local row = `row' + 1
+    replace Indicator = "=== CANNOT AFFORD `desc_`depvar'' ===" in `r'
+    local r = `r' + 1
+    replace Indicator = "" in `r'
+    local r = `r' + 1
     
-    replace Indicator = "  Share of population (%)" in `row'
+    replace Indicator = "  Share of population (%)" in `r'
     foreach yr of local years {
-        replace Y`yr' = `share_total_1_`yr'' in `row'
+        replace Y`yr' = `share_total_1_`yr'' in `r'
     }
-    local row = `row' + 1
+    local r = `r' + 1
     
-    replace Indicator = "  AROP rate (%)" in `row'
+    replace Indicator = "  AROP rate (%)" in `r'
     foreach yr of local years {
-        replace Y`yr' = `arop_rate_1_`yr'' in `row'
+        replace Y`yr' = `arop_rate_1_`yr'' in `r'
     }
-    local row = `row' + 1
+    local r = `r' + 1
     
-    replace Indicator = "  Share of those at AROP risk (%)" in `row'
+    replace Indicator = "  Share of those at AROP risk (%)" in `r'
     foreach yr of local years {
-        replace Y`yr' = `share_arop_1_`yr'' in `row'
+        replace Y`yr' = `share_arop_1_`yr'' in `r'
     }
-    local row = `row' + 1
+    local r = `r' + 1
     
-    replace Indicator = "  IWP rate (%)" in `row'
+    replace Indicator = "  IWP rate (%)" in `r'
     foreach yr of local years {
-        replace Y`yr' = `iwp_rate_1_`yr'' in `row'
+        replace Y`yr' = `iwp_rate_1_`yr'' in `r'
     }
-    local row = `row' + 1
+    local r = `r' + 1
     
-    replace Indicator = "  Share of those at IWP risk (%)" in `row'
+    replace Indicator = "  Share of those at IWP risk (%)" in `r'
     foreach yr of local years {
-        replace Y`yr' = `share_iwp_1_`yr'' in `row'
+        replace Y`yr' = `share_iwp_1_`yr'' in `r'
     }
-    local row = `row' + 1
+    local r = `r' + 1
     
-    replace Indicator = "" in `row'
-    local row = `row' + 1
-    replace Indicator = "" in `row'
-    local row = `row' + 1
-    replace Indicator = "" in `row'
-    local row = `row' + 1
+    replace Indicator = "" in `r'
+    local r = `r' + 1
+    replace Indicator = "" in `r'
+    local r = `r' + 1
     
     * === BY SEX ===
     if `has_sex' {
         
         * MALE
-        replace Indicator = "========================================" in `row'
-        local row = `row' + 1
-        replace Indicator = "BY SEX: MALE" in `row'
-        local row = `row' + 1
-        replace Indicator = "========================================" in `row'
-        local row = `row' + 1
-        replace Indicator = "" in `row'
-        local row = `row' + 1
+        replace Indicator = "=== BY SEX: MALE - `var_label' ===" in `r'
+        local r = `r' + 1
+        replace Indicator = "" in `r'
+        local r = `r' + 1
         
-        replace Indicator = "=== SAMPLE COVERAGE - MALE ===" in `row'
-        local row = `row' + 1
-        replace Indicator = "" in `row'
-        local row = `row' + 1
+        replace Indicator = "=== SAMPLE COVERAGE - MALE ===" in `r'
+        local r = `r' + 1
+        replace Indicator = "" in `r'
+        local r = `r' + 1
         
-        replace Indicator = "N Total (persons)" in `row'
+        replace Indicator = "N Total (persons)" in `r'
         foreach yr of local years {
-            replace Y`yr' = `total_pop_sex1_`yr'' in `row'
+            replace Y`yr' = `total_pop_sex1_`yr'' in `r'
         }
-        local row = `row' + 1
+        local r = `r' + 1
         
-        replace Indicator = "N Total (% of population)" in `row'
+        replace Indicator = "N Total (% of population)" in `r'
         foreach yr of local years {
-            replace Y`yr' = `pct_pop_sex1_`yr'' in `row'
+            replace Y`yr' = `pct_pop_sex1_`yr'' in `r'
         }
-        local row = `row' + 1
+        local r = `r' + 1
         
-        replace Indicator = "" in `row'
-        local row = `row' + 1
+        replace Indicator = "" in `r'
+        local r = `r' + 1
         
-        replace Indicator = "N AROP (persons)" in `row'
+        replace Indicator = "N AROP (persons)" in `r'
         foreach yr of local years {
-            replace Y`yr' = `total_arop_sex1_`yr'' in `row'
+            replace Y`yr' = `total_arop_sex1_`yr'' in `r'
         }
-        local row = `row' + 1
+        local r = `r' + 1
         
-        replace Indicator = "N AROP (% of all AROP)" in `row'
+        replace Indicator = "N AROP (% of all AROP)" in `r'
         foreach yr of local years {
-            replace Y`yr' = `pct_arop_sex1_`yr'' in `row'
+            replace Y`yr' = `pct_arop_sex1_`yr'' in `r'
         }
-        local row = `row' + 1
+        local r = `r' + 1
         
-        replace Indicator = "" in `row'
-        local row = `row' + 1
+        replace Indicator = "" in `r'
+        local r = `r' + 1
         
-        replace Indicator = "N Workers (persons)" in `row'
+        replace Indicator = "N Workers (persons)" in `r'
         foreach yr of local years {
-            replace Y`yr' = `total_workers_sex1_`yr'' in `row'
+            replace Y`yr' = `total_workers_sex1_`yr'' in `r'
         }
-        local row = `row' + 1
+        local r = `r' + 1
         
-        replace Indicator = "N Workers (% of all workers)" in `row'
+        replace Indicator = "N Workers (% of all workers)" in `r'
         foreach yr of local years {
-            replace Y`yr' = `pct_workers_sex1_`yr'' in `row'
+            replace Y`yr' = `pct_workers_sex1_`yr'' in `r'
         }
-        local row = `row' + 1
+        local r = `r' + 1
         
-        replace Indicator = "" in `row'
-        local row = `row' + 1
+        replace Indicator = "" in `r'
+        local r = `r' + 1
         
-        replace Indicator = "N IWP (persons)" in `row'
+        replace Indicator = "N IWP (persons)" in `r'
         foreach yr of local years {
-            replace Y`yr' = `total_iwp_sex1_`yr'' in `row'
+            replace Y`yr' = `total_iwp_sex1_`yr'' in `r'
         }
-        local row = `row' + 1
+        local r = `r' + 1
         
-        replace Indicator = "N IWP (% of all IWP)" in `row'
+        replace Indicator = "N IWP (% of all IWP)" in `r'
         foreach yr of local years {
-            replace Y`yr' = `pct_iwp_sex1_`yr'' in `row'
+            replace Y`yr' = `pct_iwp_sex1_`yr'' in `r'
         }
-        local row = `row' + 1
+        local r = `r' + 1
         
-        replace Indicator = "" in `row'
-        local row = `row' + 1
-        replace Indicator = "" in `row'
-        local row = `row' + 1
+        replace Indicator = "" in `r'
+        local r = `r' + 1
+        replace Indicator = "" in `r'
+        local r = `r' + 1
         
-        replace Indicator = "=== CAN AFFORD `desc_`depvar'' - MALE ===" in `row'
-        local row = `row' + 1
-        replace Indicator = "" in `row'
-        local row = `row' + 1
+        replace Indicator = "=== CAN AFFORD `desc_`depvar'' - MALE ===" in `r'
+        local r = `r' + 1
+        replace Indicator = "" in `r'
+        local r = `r' + 1
         
-        replace Indicator = "  Share of population (%)" in `row'
+        replace Indicator = "  Share of population (%)" in `r'
         foreach yr of local years {
-            replace Y`yr' = `share_total_sex1_0_`yr'' in `row'
+            replace Y`yr' = `share_total_sex1_0_`yr'' in `r'
         }
-        local row = `row' + 1
+        local r = `r' + 1
         
-        replace Indicator = "  AROP rate (%)" in `row'
+        replace Indicator = "  AROP rate (%)" in `r'
         foreach yr of local years {
-            replace Y`yr' = `arop_rate_sex1_0_`yr'' in `row'
+            replace Y`yr' = `arop_rate_sex1_0_`yr'' in `r'
         }
-        local row = `row' + 1
+        local r = `r' + 1
         
-        replace Indicator = "  Share of those at AROP risk (%)" in `row'
+        replace Indicator = "  Share of those at AROP risk (%)" in `r'
         foreach yr of local years {
-            replace Y`yr' = `share_arop_sex1_0_`yr'' in `row'
+            replace Y`yr' = `share_arop_sex1_0_`yr'' in `r'
         }
-        local row = `row' + 1
+        local r = `r' + 1
         
-        replace Indicator = "  IWP rate (%)" in `row'
+        replace Indicator = "  IWP rate (%)" in `r'
         foreach yr of local years {
-            replace Y`yr' = `iwp_rate_sex1_0_`yr'' in `row'
+            replace Y`yr' = `iwp_rate_sex1_0_`yr'' in `r'
         }
-        local row = `row' + 1
+        local r = `r' + 1
         
-        replace Indicator = "  Share of those at IWP risk (%)" in `row'
+        replace Indicator = "  Share of those at IWP risk (%)" in `r'
         foreach yr of local years {
-            replace Y`yr' = `share_iwp_sex1_0_`yr'' in `row'
+            replace Y`yr' = `share_iwp_sex1_0_`yr'' in `r'
         }
-        local row = `row' + 1
+        local r = `r' + 1
         
-        replace Indicator = "" in `row'
-        local row = `row' + 1
+        replace Indicator = "" in `r'
+        local r = `r' + 1
         
-        replace Indicator = "=== CANNOT AFFORD `desc_`depvar'' - MALE ===" in `row'
-        local row = `row' + 1
-        replace Indicator = "" in `row'
-        local row = `row' + 1
+        replace Indicator = "=== CANNOT AFFORD `desc_`depvar'' - MALE ===" in `r'
+        local r = `r' + 1
+        replace Indicator = "" in `r'
+        local r = `r' + 1
         
-        replace Indicator = "  Share of population (%)" in `row'
+        replace Indicator = "  Share of population (%)" in `r'
         foreach yr of local years {
-            replace Y`yr' = `share_total_sex1_1_`yr'' in `row'
+            replace Y`yr' = `share_total_sex1_1_`yr'' in `r'
         }
-        local row = `row' + 1
+        local r = `r' + 1
         
-        replace Indicator = "  AROP rate (%)" in `row'
+        replace Indicator = "  AROP rate (%)" in `r'
         foreach yr of local years {
-            replace Y`yr' = `arop_rate_sex1_1_`yr'' in `row'
+            replace Y`yr' = `arop_rate_sex1_1_`yr'' in `r'
         }
-        local row = `row' + 1
+        local r = `r' + 1
         
-        replace Indicator = "  Share of those at AROP risk (%)" in `row'
+        replace Indicator = "  Share of those at AROP risk (%)" in `r'
         foreach yr of local years {
-            replace Y`yr' = `share_arop_sex1_1_`yr'' in `row'
+            replace Y`yr' = `share_arop_sex1_1_`yr'' in `r'
         }
-        local row = `row' + 1
+        local r = `r' + 1
         
-        replace Indicator = "  IWP rate (%)" in `row'
+        replace Indicator = "  IWP rate (%)" in `r'
         foreach yr of local years {
-            replace Y`yr' = `iwp_rate_sex1_1_`yr'' in `row'
+            replace Y`yr' = `iwp_rate_sex1_1_`yr'' in `r'
         }
-        local row = `row' + 1
+        local r = `r' + 1
         
-        replace Indicator = "  Share of those at IWP risk (%)" in `row'
+        replace Indicator = "  Share of those at IWP risk (%)" in `r'
         foreach yr of local years {
-            replace Y`yr' = `share_iwp_sex1_1_`yr'' in `row'
+            replace Y`yr' = `share_iwp_sex1_1_`yr'' in `r'
         }
-        local row = `row' + 1
+        local r = `r' + 1
         
-        replace Indicator = "" in `row'
-        local row = `row' + 1
-        replace Indicator = "" in `row'
-        local row = `row' + 1
-        replace Indicator = "" in `row'
-        local row = `row' + 1
+        replace Indicator = "" in `r'
+        local r = `r' + 1
+        replace Indicator = "" in `r'
+        local r = `r' + 1
         
         * FEMALE
-        replace Indicator = "========================================" in `row'
-        local row = `row' + 1
-        replace Indicator = "BY SEX: FEMALE" in `row'
-        local row = `row' + 1
-        replace Indicator = "========================================" in `row'
-        local row = `row' + 1
-        replace Indicator = "" in `row'
-        local row = `row' + 1
+        replace Indicator = "=== BY SEX: FEMALE - `var_label' ===" in `r'
+        local r = `r' + 1
+        replace Indicator = "" in `r'
+        local r = `r' + 1
         
-        replace Indicator = "=== SAMPLE COVERAGE - FEMALE ===" in `row'
-        local row = `row' + 1
-        replace Indicator = "" in `row'
-        local row = `row' + 1
+        replace Indicator = "=== SAMPLE COVERAGE - FEMALE ===" in `r'
+        local r = `r' + 1
+        replace Indicator = "" in `r'
+        local r = `r' + 1
         
-        replace Indicator = "N Total (persons)" in `row'
+        replace Indicator = "N Total (persons)" in `r'
         foreach yr of local years {
-            replace Y`yr' = `total_pop_sex2_`yr'' in `row'
+            replace Y`yr' = `total_pop_sex2_`yr'' in `r'
         }
-        local row = `row' + 1
+        local r = `r' + 1
         
-        replace Indicator = "N Total (% of population)" in `row'
+        replace Indicator = "N Total (% of population)" in `r'
         foreach yr of local years {
-            replace Y`yr' = `pct_pop_sex2_`yr'' in `row'
+            replace Y`yr' = `pct_pop_sex2_`yr'' in `r'
         }
-        local row = `row' + 1
+        local r = `r' + 1
         
-        replace Indicator = "" in `row'
-        local row = `row' + 1
+        replace Indicator = "" in `r'
+        local r = `r' + 1
         
-        replace Indicator = "N AROP (persons)" in `row'
+        replace Indicator = "N AROP (persons)" in `r'
         foreach yr of local years {
-            replace Y`yr' = `total_arop_sex2_`yr'' in `row'
+            replace Y`yr' = `total_arop_sex2_`yr'' in `r'
         }
-        local row = `row' + 1
+        local r = `r' + 1
         
-        replace Indicator = "N AROP (% of all AROP)" in `row'
+        replace Indicator = "N AROP (% of all AROP)" in `r'
         foreach yr of local years {
-            replace Y`yr' = `pct_arop_sex2_`yr'' in `row'
+            replace Y`yr' = `pct_arop_sex2_`yr'' in `r'
         }
-        local row = `row' + 1
+        local r = `r' + 1
         
-        replace Indicator = "" in `row'
-        local row = `row' + 1
+        replace Indicator = "" in `r'
+        local r = `r' + 1
         
-        replace Indicator = "N Workers (persons)" in `row'
+        replace Indicator = "N Workers (persons)" in `r'
         foreach yr of local years {
-            replace Y`yr' = `total_workers_sex2_`yr'' in `row'
+            replace Y`yr' = `total_workers_sex2_`yr'' in `r'
         }
-        local row = `row' + 1
+        local r = `r' + 1
         
-        replace Indicator = "N Workers (% of all workers)" in `row'
+        replace Indicator = "N Workers (% of all workers)" in `r'
         foreach yr of local years {
-            replace Y`yr' = `pct_workers_sex2_`yr'' in `row'
+            replace Y`yr' = `pct_workers_sex2_`yr'' in `r'
         }
-        local row = `row' + 1
+        local r = `r' + 1
         
-        replace Indicator = "" in `row'
-        local row = `row' + 1
+        replace Indicator = "" in `r'
+        local r = `r' + 1
         
-        replace Indicator = "N IWP (persons)" in `row'
+        replace Indicator = "N IWP (persons)" in `r'
         foreach yr of local years {
-            replace Y`yr' = `total_iwp_sex2_`yr'' in `row'
+            replace Y`yr' = `total_iwp_sex2_`yr'' in `r'
         }
-        local row = `row' + 1
+        local r = `r' + 1
         
-        replace Indicator = "N IWP (% of all IWP)" in `row'
+        replace Indicator = "N IWP (% of all IWP)" in `r'
         foreach yr of local years {
-            replace Y`yr' = `pct_iwp_sex2_`yr'' in `row'
+            replace Y`yr' = `pct_iwp_sex2_`yr'' in `r'
         }
-        local row = `row' + 1
+        local r = `r' + 1
         
-        replace Indicator = "" in `row'
-        local row = `row' + 1
-        replace Indicator = "" in `row'
-        local row = `row' + 1
+        replace Indicator = "" in `r'
+        local r = `r' + 1
+        replace Indicator = "" in `r'
+        local r = `r' + 1
         
-        replace Indicator = "=== CAN AFFORD `desc_`depvar'' - FEMALE ===" in `row'
-        local row = `row' + 1
-        replace Indicator = "" in `row'
-        local row = `row' + 1
+        replace Indicator = "=== CAN AFFORD `desc_`depvar'' - FEMALE ===" in `r'
+        local r = `r' + 1
+        replace Indicator = "" in `r'
+        local r = `r' + 1
         
-        replace Indicator = "  Share of population (%)" in `row'
+        replace Indicator = "  Share of population (%)" in `r'
         foreach yr of local years {
-            replace Y`yr' = `share_total_sex2_0_`yr'' in `row'
+            replace Y`yr' = `share_total_sex2_0_`yr'' in `r'
         }
-        local row = `row' + 1
+        local r = `r' + 1
         
-        replace Indicator = "  AROP rate (%)" in `row'
+        replace Indicator = "  AROP rate (%)" in `r'
         foreach yr of local years {
-            replace Y`yr' = `arop_rate_sex2_0_`yr'' in `row'
+            replace Y`yr' = `arop_rate_sex2_0_`yr'' in `r'
         }
-        local row = `row' + 1
+        local r = `r' + 1
         
-        replace Indicator = "  Share of those at AROP risk (%)" in `row'
+        replace Indicator = "  Share of those at AROP risk (%)" in `r'
         foreach yr of local years {
-            replace Y`yr' = `share_arop_sex2_0_`yr'' in `row'
+            replace Y`yr' = `share_arop_sex2_0_`yr'' in `r'
         }
-        local row = `row' + 1
+        local r = `r' + 1
         
-        replace Indicator = "  IWP rate (%)" in `row'
+        replace Indicator = "  IWP rate (%)" in `r'
         foreach yr of local years {
-            replace Y`yr' = `iwp_rate_sex2_0_`yr'' in `row'
+            replace Y`yr' = `iwp_rate_sex2_0_`yr'' in `r'
         }
-        local row = `row' + 1
+        local r = `r' + 1
         
-        replace Indicator = "  Share of those at IWP risk (%)" in `row'
+        replace Indicator = "  Share of those at IWP risk (%)" in `r'
         foreach yr of local years {
-            replace Y`yr' = `share_iwp_sex2_0_`yr'' in `row'
+            replace Y`yr' = `share_iwp_sex2_0_`yr'' in `r'
         }
-        local row = `row' + 1
+        local r = `r' + 1
         
-        replace Indicator = "" in `row'
-        local row = `row' + 1
+        replace Indicator = "" in `r'
+        local r = `r' + 1
         
-        replace Indicator = "=== CANNOT AFFORD `desc_`depvar'' - FEMALE ===" in `row'
-        local row = `row' + 1
-        replace Indicator = "" in `row'
-        local row = `row' + 1
+        replace Indicator = "=== CANNOT AFFORD `desc_`depvar'' - FEMALE ===" in `r'
+        local r = `r' + 1
+        replace Indicator = "" in `r'
+        local r = `r' + 1
         
-        replace Indicator = "  Share of population (%)" in `row'
+        replace Indicator = "  Share of population (%)" in `r'
         foreach yr of local years {
-            replace Y`yr' = `share_total_sex2_1_`yr'' in `row'
+            replace Y`yr' = `share_total_sex2_1_`yr'' in `r'
         }
-        local row = `row' + 1
+        local r = `r' + 1
         
-        replace Indicator = "  AROP rate (%)" in `row'
+        replace Indicator = "  AROP rate (%)" in `r'
         foreach yr of local years {
-            replace Y`yr' = `arop_rate_sex2_1_`yr'' in `row'
+            replace Y`yr' = `arop_rate_sex2_1_`yr'' in `r'
         }
-        local row = `row' + 1
+        local r = `r' + 1
         
-        replace Indicator = "  Share of those at AROP risk (%)" in `row'
+        replace Indicator = "  Share of those at AROP risk (%)" in `r'
         foreach yr of local years {
-            replace Y`yr' = `share_arop_sex2_1_`yr'' in `row'
+            replace Y`yr' = `share_arop_sex2_1_`yr'' in `r'
         }
-        local row = `row' + 1
+        local r = `r' + 1
         
-        replace Indicator = "  IWP rate (%)" in `row'
+        replace Indicator = "  IWP rate (%)" in `r'
         foreach yr of local years {
-            replace Y`yr' = `iwp_rate_sex2_1_`yr'' in `row'
+            replace Y`yr' = `iwp_rate_sex2_1_`yr'' in `r'
         }
-        local row = `row' + 1
+        local r = `r' + 1
         
-        replace Indicator = "  Share of those at IWP risk (%)" in `row'
+        replace Indicator = "  Share of those at IWP risk (%)" in `r'
         foreach yr of local years {
-            replace Y`yr' = `share_iwp_sex2_1_`yr'' in `row'
+            replace Y`yr' = `share_iwp_sex2_1_`yr'' in `r'
         }
-        local row = `row' + 1
+        local r = `r' + 1
     }
+    
+    replace Indicator = "" in `r'
+    local r = `r' + 1
+    replace Indicator = "" in `r'
+    local r = `r' + 1
+    replace Indicator = "" in `r'
+    local r = `r' + 1
     
     keep if Indicator != ""
     
-    foreach yr of local years {
-        format Y`yr' %15.2f
-    }
+    * Append to main dataset
+    tempfile this_var
+    save `this_var', replace
     
-    capture mkdir "$output"
+    use `current_results', clear
     
-    if `sheet_num' == 1 {
-        export excel "$output/All_POV_IND_SILC_by_Deprivation.xlsx", replace sheet("`sheet_name'") firstrow(variables)
-    }
-    else {
-        export excel "$output/All_POV_IND_SILC_by_Deprivation.xlsx", sheetmodify sheet("`sheet_name'") firstrow(variables)
-    }
+    * Find next empty row
+    quietly count
+    local start_row = r(N) + 1
     
-    di "Sheet `sheet_name' created with sex decomposition"
+    append using `this_var'
+    
+    save `current_results', replace
+    
+    use `current_results', clear
 }
+
+* Final formatting and export
+keep if Indicator != ""
+
+foreach yr of local years {
+    format Y`yr' %15.2f
+}
+
+capture mkdir "$output"
+
+export excel "$output/All_POV_IND_SILC_by_Deprivation.xlsx", replace sheet("All_POV_IND_SILC_by_Deprivation") firstrow(variables)
 
 di as result _n "=== ANALYSIS COMPLETE ===" _n
 di "Output: All_POV_IND_SILC_by_Deprivation.xlsx"
-di "Sheets: One per deprivation indicator"
-di "Format: Years as columns (2017-2024), indicators as rows"
-di "Structure: Overall + By Sex (Male/Female) within each sheet"
+di "Format: All variables in ONE sheet"
+di "Structure: Overall + By Sex for each deprivation indicator"
