@@ -223,7 +223,7 @@ local desc_dep_internet "internet connection"
 
 * Create one large dataset to hold all results
 clear
-set obs 1000  // Large enough for all variables
+set obs 1000
 
 gen str100 Indicator = ""
 foreach yr of local years {
