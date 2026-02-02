@@ -16,7 +16,7 @@ di _n "=== LABOR MARKET ANALYSIS START ===" _n
 *===============================================================================
 * DESTRING VARIABLES
 *===============================================================================
-local numeric_vars "HX090 HY023 HX050 RB050 PB040 RX010 PX010 PL073 PL074 PL075 PL076 year PL051 PL111A PL140 PL200 PL031"
+local numeric_vars "HX090 HY023 HX050 RB050 PB040 RX010 PX010 PL073 PL074 PL075 PL076 year PL051A PL111A PL111 PL141 PL040A"
 
 foreach var of local numeric_vars {
     capture confirm variable `var'
@@ -101,85 +101,82 @@ gen inwork_poor_pre = (worker == 1 & arop_pre == 1)
 *===============================================================================
 di _n "=== Creating labor market classifications ===" _n
 
-* OCCUPATION (PL051A - already aggregated ISCO-08)
+* OCCUPATION - kombiniert PL051 (2017-2020) und PL051A (2021-2024)
+gen occ_cat = .
+
 capture confirm variable PL051A
 if _rc == 0 {
-    gen occ_cat = .
-    replace occ_cat = 1 if PL051A == 1 | (PL051A >= 11 & PL051A <= 14)  */ Managers
-    replace occ_cat = 2 if PL051A == 2 | (PL051A >= 21 & PL051A <= 26)  */ Professionals
-    replace occ_cat = 3 if PL051A == 3 | (PL051A >= 31 & PL051A <= 35)  */ Technicians
-    replace occ_cat = 4 if PL051A == 4 | (PL051A >= 41 & PL051A <= 44)  */ Clerical
-    replace occ_cat = 5 if PL051A == 5 | (PL051A >= 51 & PL051A <= 54)  */ Service/Sales
-    replace occ_cat = 6 if PL051A == 6 | (PL051A >= 61 & PL051A <= 63)  */ Agriculture
-    replace occ_cat = 7 if PL051A == 7 | (PL051A >= 71 & PL051A <= 75)  */ Craft
-    replace occ_cat = 8 if PL051A == 8 | (PL051A >= 81 & PL051A <= 83)  */ Operators
-    replace occ_cat = 9 if PL051A == 9 | (PL051A >= 91 & PL051A <= 96)  */ Elementary
-    replace occ_cat = 10 if PL051A == 0                                 */ Armed Forces
-    
-    label define occ_lbl 1 "Managers" 2 "Professionals" 3 "Technicians" 4 "Clerical" 5 "Service/Sales" 6 "Agriculture" 7 "Craft" 8 "Operators" 9 "Elementary" 10 "Armed Forces"
-    label values occ_cat occ_lbl
-}
-else {
-    gen occ_cat = .
+    replace occ_cat = 1 if (PL051A == 1 | (PL051A >= 11 & PL051A <= 14)) & year >= 2021
+    replace occ_cat = 2 if (PL051A == 2 | (PL051A >= 21 & PL051A <= 26)) & year >= 2021
+    replace occ_cat = 3 if (PL051A == 3 | (PL051A >= 31 & PL051A <= 35)) & year >= 2021
+    replace occ_cat = 4 if (PL051A == 4 | (PL051A >= 41 & PL051A <= 44)) & year >= 2021
+    replace occ_cat = 5 if (PL051A == 5 | (PL051A >= 51 & PL051A <= 54)) & year >= 2021
+    replace occ_cat = 6 if (PL051A == 6 | (PL051A >= 61 & PL051A <= 63)) & year >= 2021
+    replace occ_cat = 7 if (PL051A == 7 | (PL051A >= 71 & PL051A <= 75)) & year >= 2021
+    replace occ_cat = 8 if (PL051A == 8 | (PL051A >= 81 & PL051A <= 83)) & year >= 2021
+    replace occ_cat = 9 if (PL051A == 9 | (PL051A >= 91 & PL051A <= 96)) & year >= 2021
+    replace occ_cat = 10 if PL051A == 0 & year >= 2021
 }
 
-* INDUSTRY (PL111A - already aggregated NACE)
-capture confirm variable PL111A
+capture confirm variable PL051
 if _rc == 0 {
-    gen ind_cat = .
-    replace ind_cat = 1 if PL111A == 1   */ A: Agriculture, forestry, fishing
-    replace ind_cat = 2 if PL111A == 2   */ B-E: Mining, Manufacturing, Utilities
-    replace ind_cat = 3 if PL111A == 3   */ F: Construction
-    replace ind_cat = 4 if PL111A == 4   */ G: Wholesale retail
-    replace ind_cat = 5 if PL111A == 5   */ H: Transportation and storage
-    replace ind_cat = 6 if PL111A == 6   */ I: Accommodation and food service
-    replace ind_cat = 7 if PL111A == 7   */ J: Information and communication
-    replace ind_cat = 8 if PL111A == 8   */ K: Financial and insurance
-    replace ind_cat = 9 if PL111A == 9   */ L-N: Real estate, Professional, Administrative
-    replace ind_cat = 10 if PL111A == 10 */ O: Public admin and defence
-    replace ind_cat = 11 if PL111A == 11 */ P: Education
-    replace ind_cat = 12 if PL111A == 12 */ Q: Health and social work
-    replace ind_cat = 13 if PL111A == 13 */ R-U: Other services
-    
-    label define ind_lbl 1 "Agriculture/Forestry/Fishing" 2 "Mining/Manufacturing/Utilities" 3 "Construction" 4 "Wholesale/Retail" 5 "Transportation" 6 "Accommodation/Food" 7 "Information/Communication" 8 "Finance/Insurance" 9 "Real Estate/Professional" 10 "Public Admin" 11 "Education" 12 "Health/Social Work" 13 "Other Services"
-    label values ind_cat ind_lbl
-}
-else {
-    gen ind_cat = .
+    replace occ_cat = 1 if (PL051 == 1 | (PL051 >= 11 & PL051 <= 14)) & year <= 2020
+    replace occ_cat = 2 if (PL051 == 2 | (PL051 >= 21 & PL051 <= 26)) & year <= 2020
+    replace occ_cat = 3 if (PL051 == 3 | (PL051 >= 31 & PL051 <= 35)) & year <= 2020
+    replace occ_cat = 4 if (PL051 == 4 | (PL051 >= 41 & PL051 <= 44)) & year <= 2020
+    replace occ_cat = 5 if (PL051 == 5 | (PL051 >= 51 & PL051 <= 54)) & year <= 2020
+    replace occ_cat = 6 if (PL051 == 6 | (PL051 >= 61 & PL051 <= 63)) & year <= 2020
+    replace occ_cat = 7 if (PL051 == 7 | (PL051 >= 71 & PL051 <= 75)) & year <= 2020
+    replace occ_cat = 8 if (PL051 == 8 | (PL051 >= 81 & PL051 <= 83)) & year <= 2020
+    replace occ_cat = 9 if (PL051 == 9 | (PL051 >= 91 & PL051 <= 96)) & year <= 2020
+    replace occ_cat = 10 if PL051 == 0 & year <= 2020
 }
 
-* CONTRACT TYPE (PL141 - 4 Kategorien)
+label define occ_lbl 1 "Managers" 2 "Professionals" 3 "Technicians" 4 "Clerical" 5 "Service/Sales" 6 "Agriculture" 7 "Craft" 8 "Operators" 9 "Elementary" 10 "Armed Forces"
+label values occ_cat occ_lbl
+
+
+* CONTRACT TYPE - kombiniert PL140 (2 cat) und PL141 (4 cat)
+gen contract_cat = .
+
 capture confirm variable PL141
 if _rc == 0 {
-    gen contract_cat = .
-    replace contract_cat = 1 if PL141 == 21  */ Permanent written
-    replace contract_cat = 2 if PL141 == 22  */ Permanent verbal
-    replace contract_cat = 3 if PL141 == 11  */ Fixed-term written
-    replace contract_cat = 4 if PL141 == 12  */ Fixed-term verbal
-    
-    label define contract_lbl 1 "Permanent (written)" 2 "Permanent (verbal)" 3 "Fixed-term (written)" 4 "Fixed-term (verbal)"
-    label values contract_cat contract_lbl
-}
-else {
-    gen contract_cat = .
+    replace contract_cat = 1 if PL141 == 21 & year >= 2021  
+    replace contract_cat = 2 if PL141 == 22 & year >= 2021  
+    replace contract_cat = 3 if PL141 == 11 & year >= 2021 
+    replace contract_cat = 4 if PL141 == 12 & year >= 2021 
 }
 
+capture confirm variable PL140
+if _rc == 0 {
+    replace contract_cat = 1 if PL140 == 1 & year <= 2020  
+    replace contract_cat = 3 if PL140 == 2 & year <= 2020  
+}
 
-* EMPLOYMENT STATUS (PL040A)
+label define contract_lbl 1 "Permanent (written)" 2 "Permanent (verbal)" 3 "Fixed-term (written)" 4 "Fixed-term (verbal)"
+label values contract_cat contract_lbl
+
+* EMPLOYMENT STATUS - kombiniert PL040 und PL040A
+gen empl_status = .
+
 capture confirm variable PL040A
 if _rc == 0 {
-    gen empl_status = .
-    replace empl_status = 1 if PL040A == 1  */ Self-employed with employees
-    replace empl_status = 2 if PL040A == 2  */ Self-employed without employees
-    replace empl_status = 3 if PL040A == 3  */ Employee
-    replace empl_status = 4 if PL040A == 4  */ Family worker (unpaid)
-    
-    label define empl_lbl 1 "Self-employed (with employees)" 2 "Self-employed (without employees)" 3 "Employee" 4 "Family worker"
-    label values empl_status empl_lbl
+    replace empl_status = 1 if PL040A == 1 & year >= 2021
+    replace empl_status = 2 if PL040A == 2 & year >= 2021
+    replace empl_status = 3 if PL040A == 3 & year >= 2021
+    replace empl_status = 4 if PL040A == 4 & year >= 2021
 }
-else {
-    gen empl_status = .
+
+capture confirm variable PL040
+if _rc == 0 {
+    replace empl_status = 1 if PL040 == 1 & year <= 2020
+    replace empl_status = 2 if PL040 == 2 & year <= 2020
+    replace empl_status = 3 if PL040 == 3 & year <= 2020
+    replace empl_status = 4 if PL040 == 4 & year <= 2020
 }
+
+label define empl_lbl 1 "Self-employed (with employees)" 2 "Self-employed (without employees)" 3 "Employee" 4 "Family worker"
+label values empl_status empl_lbl
 
 *===============================================================================
 * CALCULATE STATISTICS - OCCUPATION
@@ -257,7 +254,7 @@ foreach yr of local years {
 * CALCULATE STATISTICS - INDUSTRY
 *===============================================================================
 foreach yr of local years {
-    forvalues ic = 1/14 {
+    forvalues ic = 1/13 {
         quietly count if year == `yr' & ind_cat == `ic' & worker == 1
         if r(N) == 0 {
             local iwp_rate_post_ind`ic'_`yr' = .
@@ -307,7 +304,7 @@ foreach yr of local years {
 * CALCULATE STATISTICS - CONTRACT TYPE
 *===============================================================================
 foreach yr of local years {
-    forvalues cc = 1/2 {
+    forvalues cc = 1/4 {
         quietly count if year == `yr' & contract_cat == `cc' & worker == 1
         if r(N) == 0 {
             local iwp_rate_post_contract`cc'_`yr' = .
@@ -404,7 +401,7 @@ foreach yr of local years {
 }
 
 *===============================================================================
-* CREATE EXCEL OUTPUT
+* CREATE EXCEL OUTPUT - OCCUPATION
 *===============================================================================
 preserve
 clear
@@ -497,8 +494,292 @@ foreach yr of local years {
     format Value_`yr'_ChPct %15.2f
 }
 
-export excel "$output/All_POV_IND_SILC_LabourMarket.xlsx", replace sheet("Occupation") firstrow(variables)
+export excel "$output/Poverty_LaborMarket_PrePost.xlsx", replace sheet("Occupation") firstrow(variables)
+
+restore
+
+*===============================================================================
+* CREATE EXCEL OUTPUT - INDUSTRY
+*===============================================================================
+preserve
+clear
+set obs 300
+
+gen str100 Variable = ""
+foreach yr of local years {
+    gen double Value_`yr'_pre = .
+    gen double Value_`yr'_post = .
+    gen double Value_`yr'_Ch = .
+    gen double Value_`yr'_ChPct = .
+}
+
+local row = 1
+
+replace Variable = "=== IN-WORK POVERTY BY INDUSTRY ===" in `row'
+local row = `row' + 1
+
+local ind_label_1 "Agriculture/Forestry/Fishing"
+local ind_label_2 "Mining/Manufacturing/Utilities"
+local ind_label_3 "Construction"
+local ind_label_4 "Wholesale/Retail"
+local ind_label_5 "Transportation"
+local ind_label_6 "Accommodation/Food"
+local ind_label_7 "Information/Communication"
+local ind_label_8 "Finance/Insurance"
+local ind_label_9 "Real Estate/Professional"
+local ind_label_10 "Public Admin"
+local ind_label_11 "Education"
+local ind_label_12 "Health/Social Work"
+local ind_label_13 "Other Services"
+
+forvalues ic = 1/13 {
+    replace Variable = "" in `row'
+    local row = `row' + 1
+    
+    replace Variable = "=== `ind_label_`ic'' ===" in `row'
+    local row = `row' + 1
+    
+    replace Variable = "Share of workers (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_post = `share_workers_ind`ic'_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "IWP rate (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `iwp_rate_pre_ind`ic'_`yr'' in `row'
+        replace Value_`yr'_post = `iwp_rate_post_ind`ic'_`yr'' in `row'
+        replace Value_`yr'_Ch = `iwp_rate_post_ind`ic'_`yr'' - `iwp_rate_pre_ind`ic'_`yr'' in `row'
+        if `iwp_rate_pre_ind`ic'_`yr'' != . & `iwp_rate_pre_ind`ic'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`iwp_rate_post_ind`ic'_`yr'' - `iwp_rate_pre_ind`ic'_`yr'') / `iwp_rate_pre_ind`ic'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Share of IWP (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `share_iwp_pre_ind`ic'_`yr'' in `row'
+        replace Value_`yr'_post = `share_iwp_post_ind`ic'_`yr'' in `row'
+        replace Value_`yr'_Ch = `share_iwp_post_ind`ic'_`yr'' - `share_iwp_pre_ind`ic'_`yr'' in `row'
+        if `share_iwp_pre_ind`ic'_`yr'' != . & `share_iwp_pre_ind`ic'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`share_iwp_post_ind`ic'_`yr'' - `share_iwp_pre_ind`ic'_`yr'') / `share_iwp_pre_ind`ic'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Number workers" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_post = `n_workers_ind`ic'_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Number IWP" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `n_iwp_pre_ind`ic'_`yr'' in `row'
+        replace Value_`yr'_post = `n_iwp_post_ind`ic'_`yr'' in `row'
+        replace Value_`yr'_Ch = `n_iwp_post_ind`ic'_`yr'' - `n_iwp_pre_ind`ic'_`yr'' in `row'
+        if `n_iwp_pre_ind`ic'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`n_iwp_post_ind`ic'_`yr'' - `n_iwp_pre_ind`ic'_`yr'') / `n_iwp_pre_ind`ic'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+}
+
+keep if Variable != ""
+
+foreach yr of local years {
+    format Value_`yr'_pre %15.2f
+    format Value_`yr'_post %15.2f
+    format Value_`yr'_Ch %15.2f
+    format Value_`yr'_ChPct %15.2f
+}
+
+export excel "$output/Poverty_LaborMarket_PrePost.xlsx", sheetmodify sheet("Industry") firstrow(variables)
+
+restore
+
+*===============================================================================
+* CREATE EXCEL OUTPUT - CONTRACT TYPE
+*===============================================================================
+preserve
+clear
+set obs 300
+
+gen str100 Variable = ""
+foreach yr of local years {
+    gen double Value_`yr'_pre = .
+    gen double Value_`yr'_post = .
+    gen double Value_`yr'_Ch = .
+    gen double Value_`yr'_ChPct = .
+}
+
+local row = 1
+
+replace Variable = "=== IN-WORK POVERTY BY CONTRACT TYPE ===" in `row'
+local row = `row' + 1
+
+local contract_label_1 "Permanent (written)"
+local contract_label_2 "Permanent (verbal)"
+local contract_label_3 "Fixed-term (written)"
+local contract_label_4 "Fixed-term (verbal)"
+
+forvalues cc = 1/4 {
+    replace Variable = "" in `row'
+    local row = `row' + 1
+    
+    replace Variable = "=== `contract_label_`cc'' ===" in `row'
+    local row = `row' + 1
+    
+    replace Variable = "Share of workers (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_post = `share_workers_contract`cc'_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "IWP rate (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `iwp_rate_pre_contract`cc'_`yr'' in `row'
+        replace Value_`yr'_post = `iwp_rate_post_contract`cc'_`yr'' in `row'
+        replace Value_`yr'_Ch = `iwp_rate_post_contract`cc'_`yr'' - `iwp_rate_pre_contract`cc'_`yr'' in `row'
+        if `iwp_rate_pre_contract`cc'_`yr'' != . & `iwp_rate_pre_contract`cc'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`iwp_rate_post_contract`cc'_`yr'' - `iwp_rate_pre_contract`cc'_`yr'') / `iwp_rate_pre_contract`cc'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Share of IWP (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `share_iwp_pre_contract`cc'_`yr'' in `row'
+        replace Value_`yr'_post = `share_iwp_post_contract`cc'_`yr'' in `row'
+        replace Value_`yr'_Ch = `share_iwp_post_contract`cc'_`yr'' - `share_iwp_pre_contract`cc'_`yr'' in `row'
+        if `share_iwp_pre_contract`cc'_`yr'' != . & `share_iwp_pre_contract`cc'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`share_iwp_post_contract`cc'_`yr'' - `share_iwp_pre_contract`cc'_`yr'') / `share_iwp_pre_contract`cc'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Number workers" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_post = `n_workers_contract`cc'_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Number IWP" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `n_iwp_pre_contract`cc'_`yr'' in `row'
+        replace Value_`yr'_post = `n_iwp_post_contract`cc'_`yr'' in `row'
+        replace Value_`yr'_Ch = `n_iwp_post_contract`cc'_`yr'' - `n_iwp_pre_contract`cc'_`yr'' in `row'
+        if `n_iwp_pre_contract`cc'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`n_iwp_post_contract`cc'_`yr'' - `n_iwp_pre_contract`cc'_`yr'') / `n_iwp_pre_contract`cc'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+}
+
+keep if Variable != ""
+
+foreach yr of local years {
+    format Value_`yr'_pre %15.2f
+    format Value_`yr'_post %15.2f
+    format Value_`yr'_Ch %15.2f
+    format Value_`yr'_ChPct %15.2f
+}
+
+export excel "$output/Poverty_LaborMarket_PrePost.xlsx", sheetmodify sheet("Contract") firstrow(variables)
+
+restore
+
+*===============================================================================
+* CREATE EXCEL OUTPUT - EMPLOYMENT STATUS
+*===============================================================================
+preserve
+clear
+set obs 300
+
+gen str100 Variable = ""
+foreach yr of local years {
+    gen double Value_`yr'_pre = .
+    gen double Value_`yr'_post = .
+    gen double Value_`yr'_Ch = .
+    gen double Value_`yr'_ChPct = .
+}
+
+local row = 1
+
+replace Variable = "=== IN-WORK POVERTY BY EMPLOYMENT STATUS ===" in `row'
+local row = `row' + 1
+
+local empl_label_1 "Self-employed (with employees)"
+local empl_label_2 "Self-employed (without employees)"
+local empl_label_3 "Employee"
+local empl_label_4 "Family worker"
+
+forvalues es = 1/4 {
+    replace Variable = "" in `row'
+    local row = `row' + 1
+    
+    replace Variable = "=== `empl_label_`es'' ===" in `row'
+    local row = `row' + 1
+    
+    replace Variable = "Share of workers (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_post = `share_workers_empl`es'_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "IWP rate (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `iwp_rate_pre_empl`es'_`yr'' in `row'
+        replace Value_`yr'_post = `iwp_rate_post_empl`es'_`yr'' in `row'
+        replace Value_`yr'_Ch = `iwp_rate_post_empl`es'_`yr'' - `iwp_rate_pre_empl`es'_`yr'' in `row'
+        if `iwp_rate_pre_empl`es'_`yr'' != . & `iwp_rate_pre_empl`es'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`iwp_rate_post_empl`es'_`yr'' - `iwp_rate_pre_empl`es'_`yr'') / `iwp_rate_pre_empl`es'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Share of IWP (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `share_iwp_pre_empl`es'_`yr'' in `row'
+        replace Value_`yr'_post = `share_iwp_post_empl`es'_`yr'' in `row'
+        replace Value_`yr'_Ch = `share_iwp_post_empl`es'_`yr'' - `share_iwp_pre_empl`es'_`yr'' in `row'
+        if `share_iwp_pre_empl`es'_`yr'' != . & `share_iwp_pre_empl`es'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`share_iwp_post_empl`es'_`yr'' - `share_iwp_pre_empl`es'_`yr'') / `share_iwp_pre_empl`es'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Number workers" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_post = `n_workers_empl`es'_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Number IWP" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `n_iwp_pre_empl`es'_`yr'' in `row'
+        replace Value_`yr'_post = `n_iwp_post_empl`es'_`yr'' in `row'
+        replace Value_`yr'_Ch = `n_iwp_post_empl`es'_`yr'' - `n_iwp_pre_empl`es'_`yr'' in `row'
+        if `n_iwp_pre_empl`es'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`n_iwp_post_empl`es'_`yr'' - `n_iwp_pre_empl`es'_`yr'') / `n_iwp_pre_empl`es'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+}
+
+keep if Variable != ""
+
+foreach yr of local years {
+    format Value_`yr'_pre %15.2f
+    format Value_`yr'_post %15.2f
+    format Value_`yr'_Ch %15.2f
+    format Value_`yr'_ChPct %15.2f
+}
+
+export excel "$output/Poverty_LaborMarket_PrePost.xlsx", sheetmodify sheet("Employment") firstrow(variables)
 
 restore
 
 di as result _n "=== LABOR MARKET ANALYSIS COMPLETE ===" _n
+di as result "Output: Poverty_LaborMarket_PrePost.xlsx"
+di as result "Sheets: Occupation (10 cat), Industry (13 cat), Contract (4 cat), Employment (4 cat)"
