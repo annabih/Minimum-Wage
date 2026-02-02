@@ -1,0 +1,983 @@
+*******************************************************************************************************************************************************************************************
+*** Titel: Housing and Poverty Analysis - PRE/POST TRANSFER - EU-SILC Austria 2017-2024
+*** Date: 30.01.2026
+*** Variables: Tenure status, Housing cost burden, Overcrowding, Housing deprivation
+*******************************************************************************************************************************************************************************************
+clear all
+set more off
+
+use "D:\Data\AT_CROSS\SILC_CrossSec_AllYears_2015_2024.dta"
+global output "D:\InWorkPoverty_SILC"
+
+local years "2017 2018 2019 2020 2021 2022 2023 2024"
+
+di _n "=== HOUSING ANALYSIS START ===" _n
+
+*===============================================================================
+* DESTRING VARIABLES
+*===============================================================================
+local numeric_vars "HX090 HY023 HX050 RB050 PB040 RX010 PX010 PL073 PL074 PL075 PL076 year HH010 HH030 HH040 HH050 HH060 HH070 HH080 HH081 HY020 HY070"
+
+foreach var of local numeric_vars {
+    capture confirm variable `var'
+    if _rc == 0 {
+        capture confirm string variable `var'
+        if _rc == 0 {
+            replace `var' = subinstr(`var', ",", ".", .)
+            destring `var', replace force
+        }
+    }
+}
+
+*===============================================================================
+* BASIC VARIABLES
+*===============================================================================
+capture confirm variable RB050
+if _rc == 0 {
+    gen dwt = RB050
+}
+else {
+    gen dwt = PB040
+}
+
+capture confirm variable RX010
+if _rc == 0 {
+    gen age = RX010
+}
+else {
+    gen age = PX010
+}
+
+gen months_worked = 0
+foreach var in PL073 PL074 PL075 PL076 {
+    capture confirm variable `var'
+    if _rc == 0 {
+        replace months_worked = months_worked + `var' if !missing(`var')
+    }
+}
+replace months_worked = 12 if months_worked > 12 & !missing(months_worked)
+
+* POST-TRANSFER
+gen eq_hh_ils_post = HX090
+label variable eq_hh_ils_post "Equivalised income POST-transfer"
+
+* PRE-TRANSFER
+gen eq_hh_ils_pre = HY023 / HX050 if !missing(HY023) & !missing(HX050) & HX050 > 0
+label variable eq_hh_ils_pre "Equivalised income PRE-transfer"
+
+drop if missing(eq_hh_ils_post) | missing(dwt) | missing(age)
+
+*===============================================================================
+* HOUSEHOLD ID
+*===============================================================================
+capture confirm variable id_hh
+if _rc == 0 {
+    gen hh_id = id_hh
+}
+else {
+    capture confirm variable HB030
+    if _rc == 0 {
+        gen hh_id = HB030
+    }
+    else {
+        capture confirm variable DB030
+        if _rc == 0 {
+            gen hh_id = DB030
+        }
+    }
+}
+
+*===============================================================================
+* POVERTY THRESHOLD
+*===============================================================================
+tempfile thresholds
+tempname h
+postfile `h' int year double median_eq_hh_ils pov_threshold_60 using `thresholds', replace
+
+foreach yr of local years {
+    quietly count if year==`yr'
+    if r(N)==0 continue
+    quietly _pctile eq_hh_ils_post [pw=dwt] if year==`yr', p(50)
+    local median_val = r(r1)
+    post `h' (`yr') (`median_val') (0.60*`median_val')
+}
+postclose `h'
+
+merge m:1 year using `thresholds', nogen
+replace pov_threshold_60 = round(pov_threshold_60, 1)
+
+*===============================================================================
+* POVERTY STATUS
+*===============================================================================
+gen byte arop_post = (eq_hh_ils_post < pov_threshold_60) if !missing(pov_threshold_60)
+gen byte arop_pre = (eq_hh_ils_pre < pov_threshold_60) if !missing(pov_threshold_60) & !missing(eq_hh_ils_pre)
+
+gen worker = (months_worked > 6 & age >= 18 & age <= 64)
+gen inwork_poor_post = (worker == 1 & arop_post == 1)
+gen inwork_poor_pre = (worker == 1 & arop_pre == 1)
+
+*===============================================================================
+* HOUSING CLASSIFICATIONS
+*===============================================================================
+di _n "=== Creating housing classifications ===" _n
+
+* TENURE STATUS
+capture confirm variable HH010
+if _rc == 0 {
+    gen tenure_cat = .
+    replace tenure_cat = 1 if HH010 == 1  // Owner, no mortgage
+    replace tenure_cat = 2 if HH010 == 2  // Owner, with mortgage
+    replace tenure_cat = 3 if HH010 == 3  // Tenant, market rent
+    replace tenure_cat = 4 if HH010 == 4  // Tenant, reduced/free rent
+    
+    label define tenure_lbl 1 "Owner (no mortgage)" 2 "Owner (with mortgage)" 3 "Tenant (market)" 4 "Tenant (reduced/free)"
+    label values tenure_cat tenure_lbl
+    
+    * Simplified: Owner vs Tenant
+    gen tenure_simple = .
+    replace tenure_simple = 1 if inlist(tenure_cat, 1, 2)  // Owner
+    replace tenure_simple = 2 if inlist(tenure_cat, 3, 4)  // Tenant
+    
+    label define tenure_simple_lbl 1 "Owner" 2 "Tenant"
+    label values tenure_simple tenure_simple_lbl
+}
+else {
+    gen tenure_cat = .
+    gen tenure_simple = .
+}
+
+* HOUSING COST BURDEN (HH housing costs as % of household income)
+capture confirm variable HY020
+capture confirm variable HY070
+if _rc == 0 {
+    * Calculate household disposable income at household level
+    bysort year hh_id: egen hh_disp_inc = total(eq_hh_ils_post * HX050)
+    
+    gen housing_cost_burden = (HY070 / hh_disp_inc) * 100 if hh_disp_inc > 0 & !missing(HY070)
+    
+    * Overburden threshold: >40% of income
+    gen overburden_cat = .
+    replace overburden_cat = 1 if housing_cost_burden > 40 & !missing(housing_cost_burden)  // Overburdened
+    replace overburden_cat = 2 if housing_cost_burden <= 40 & !missing(housing_cost_burden) // Not overburdened
+    
+    label define overburden_lbl 1 "Overburdened (>40%)" 2 "Not overburdened (<=40%)"
+    label values overburden_cat overburden_lbl
+    
+    * Categories: <25%, 25-40%, >40%
+    gen burden_cat = .
+    replace burden_cat = 1 if housing_cost_burden < 25 & !missing(housing_cost_burden)       // Low
+    replace burden_cat = 2 if housing_cost_burden >= 25 & housing_cost_burden <= 40 & !missing(housing_cost_burden)  // Medium
+    replace burden_cat = 3 if housing_cost_burden > 40 & !missing(housing_cost_burden)       // High
+    
+    label define burden_lbl 1 "Low (<25%)" 2 "Medium (25-40%)" 3 "High (>40%)"
+    label values burden_cat burden_lbl
+}
+else {
+    gen housing_cost_burden = .
+    gen overburden_cat = .
+    gen burden_cat = .
+}
+
+* OVERCROWDING
+capture confirm variable HH030
+if _rc == 0 {
+    gen overcrowd_cat = .
+    replace overcrowd_cat = 1 if HH030 == 1  // Overcrowded
+    replace overcrowd_cat = 2 if HH030 == 2  // Not overcrowded
+    
+    label define overcrowd_lbl 1 "Overcrowded" 2 "Not overcrowded"
+    label values overcrowd_cat overcrowd_lbl
+}
+else {
+    gen overcrowd_cat = .
+}
+
+* HOUSING DEPRIVATION INDICATORS
+* HH040 - Leaking roof, damp walls/floors
+capture confirm variable HH040
+if _rc == 0 {
+    gen leak_damp = .
+    replace leak_damp = 1 if HH040 == 1  // Yes
+    replace leak_damp = 2 if HH040 == 2  // No
+    
+    label define leak_lbl 1 "Leak/damp problem" 2 "No leak/damp"
+    label values leak_damp leak_lbl
+}
+else {
+    gen leak_damp = .
+}
+
+* HH050 - Bath or shower
+capture confirm variable HH050
+if _rc == 0 {
+    gen no_bath = .
+    replace no_bath = 1 if HH050 == 1  // Yes (has bath/shower)
+    replace no_bath = 2 if HH050 == 2  // No (no bath/shower)
+    
+    * Reverse coding for consistency (1 = problem)
+    gen bath_cat = .
+    replace bath_cat = 1 if no_bath == 2  // No bath/shower
+    replace bath_cat = 2 if no_bath == 1  // Has bath/shower
+    
+    label define bath_lbl 1 "No bath/shower" 2 "Has bath/shower"
+    label values bath_cat bath_lbl
+}
+else {
+    gen bath_cat = .
+}
+
+* HH060 - Indoor flushing toilet
+capture confirm variable HH060
+if _rc == 0 {
+    gen no_toilet = .
+    replace no_toilet = 1 if HH060 == 1  // Yes (has toilet)
+    replace no_toilet = 2 if HH060 == 2  // No (no toilet)
+    
+    * Reverse coding
+    gen toilet_cat = .
+    replace toilet_cat = 1 if no_toilet == 2  // No toilet
+    replace toilet_cat = 2 if no_toilet == 1  // Has toilet
+    
+    label define toilet_lbl 1 "No indoor toilet" 2 "Has indoor toilet"
+    label values toilet_cat toilet_lbl
+}
+else {
+    gen toilet_cat = .
+}
+
+* HH070 - Ability to keep home adequately warm
+capture confirm variable HH070
+if _rc == 0 {
+    gen heating_cat = .
+    replace heating_cat = 1 if HH070 == 1  // Yes (can keep warm)
+    replace heating_cat = 2 if HH070 == 2  // No (cannot keep warm)
+    
+    * Reverse coding
+    gen warmth_cat = .
+    replace warmth_cat = 1 if heating_cat == 2  // Cannot keep warm
+    replace warmth_cat = 2 if heating_cat == 1  // Can keep warm
+    
+    label define warmth_lbl 1 "Cannot keep warm" 2 "Can keep warm"
+    label values warmth_cat warmth_lbl
+}
+else {
+    gen warmth_cat = .
+}
+
+* SEVERE HOUSING DEPRIVATION (any of the major problems)
+gen severe_housing_depr = .
+replace severe_housing_depr = 1 if (leak_damp == 1 | bath_cat == 1 | toilet_cat == 1 | warmth_cat == 1 | overcrowd_cat == 1) & (!missing(leak_damp) | !missing(bath_cat) | !missing(toilet_cat) | !missing(warmth_cat) | !missing(overcrowd_cat))
+replace severe_housing_depr = 2 if severe_housing_depr != 1 & (!missing(leak_damp) | !missing(bath_cat) | !missing(toilet_cat) | !missing(warmth_cat) | !missing(overcrowd_cat))
+
+label define severe_housing_lbl 1 "Severe housing problem" 2 "No severe problem"
+label values severe_housing_depr severe_housing_lbl
+
+*===============================================================================
+* REFERENCE TOTALS
+*===============================================================================
+foreach yr of local years {
+    quietly count if year == `yr'
+    if r(N) == 0 continue
+    
+    sum dwt if year == `yr'
+    local ref_pop_`yr' = r(sum)
+    
+    gen temp_arop_post = arop_post * dwt if year == `yr'
+    sum temp_arop_post
+    local ref_arop_post_`yr' = r(sum)
+    drop temp_arop_post
+    
+    gen temp_arop_pre = arop_pre * dwt if year == `yr'
+    sum temp_arop_pre
+    local ref_arop_pre_`yr' = r(sum)
+    drop temp_arop_pre
+    
+    sum dwt if year == `yr' & worker == 1
+    local ref_workers_`yr' = r(sum)
+    
+    gen temp_iwp_post = inwork_poor_post * dwt if year == `yr' & worker == 1
+    sum temp_iwp_post
+    local ref_iwp_post_`yr' = r(sum)
+    drop temp_iwp_post
+    
+    gen temp_iwp_pre = inwork_poor_pre * dwt if year == `yr' & worker == 1
+    sum temp_iwp_pre
+    local ref_iwp_pre_`yr' = r(sum)
+    drop temp_iwp_pre
+}
+
+*===============================================================================
+* CALCULATE STATISTICS - TENURE STATUS
+*===============================================================================
+di _n "=== Calculating statistics by tenure status ===" _n
+
+foreach yr of local years {
+    forvalues tc = 1/2 {
+        quietly count if year == `yr' & tenure_simple == `tc'
+        if r(N) == 0 {
+            local arop_rate_post_tenure`tc'_`yr' = .
+            local arop_rate_pre_tenure`tc'_`yr' = .
+            local iwp_rate_post_tenure`tc'_`yr' = .
+            local iwp_rate_pre_tenure`tc'_`yr' = .
+            local n_pop_tenure`tc'_`yr' = .
+            local n_arop_post_tenure`tc'_`yr' = .
+            local n_arop_pre_tenure`tc'_`yr' = .
+            local n_workers_tenure`tc'_`yr' = .
+            local n_iwp_post_tenure`tc'_`yr' = .
+            local n_iwp_pre_tenure`tc'_`yr' = .
+            local share_pop_tenure`tc'_`yr' = .
+            local share_arop_post_tenure`tc'_`yr' = .
+            local share_arop_pre_tenure`tc'_`yr' = .
+            local share_workers_tenure`tc'_`yr' = .
+            local share_iwp_post_tenure`tc'_`yr' = .
+            local share_iwp_pre_tenure`tc'_`yr' = .
+            continue
+        }
+        
+        * Population
+        sum dwt if year == `yr' & tenure_simple == `tc'
+        local n_pop_tenure`tc'_`yr' = r(sum)
+        local share_pop_tenure`tc'_`yr' = (`n_pop_tenure`tc'_`yr'' / `ref_pop_`yr'') * 100
+        
+        * AROP POST
+        sum arop_post [aw=dwt] if year == `yr' & tenure_simple == `tc'
+        local arop_rate_post_tenure`tc'_`yr' = r(mean) * 100
+        
+        gen temp = arop_post * dwt if year == `yr' & tenure_simple == `tc'
+        sum temp
+        local n_arop_post_tenure`tc'_`yr' = r(sum)
+        drop temp
+        
+        if `ref_arop_post_`yr'' > 0 {
+            local share_arop_post_tenure`tc'_`yr' = (`n_arop_post_tenure`tc'_`yr'' / `ref_arop_post_`yr'') * 100
+        }
+        
+        * AROP PRE
+        sum arop_pre [aw=dwt] if year == `yr' & tenure_simple == `tc'
+        local arop_rate_pre_tenure`tc'_`yr' = r(mean) * 100
+        
+        gen temp = arop_pre * dwt if year == `yr' & tenure_simple == `tc'
+        sum temp
+        local n_arop_pre_tenure`tc'_`yr' = r(sum)
+        drop temp
+        
+        if `ref_arop_pre_`yr'' > 0 {
+            local share_arop_pre_tenure`tc'_`yr' = (`n_arop_pre_tenure`tc'_`yr'' / `ref_arop_pre_`yr'') * 100
+        }
+        
+        * IWP
+        quietly count if year == `yr' & tenure_simple == `tc' & worker == 1
+        if r(N) > 0 {
+            sum dwt if year == `yr' & tenure_simple == `tc' & worker == 1
+            local n_workers_tenure`tc'_`yr' = r(sum)
+            local share_workers_tenure`tc'_`yr' = (`n_workers_tenure`tc'_`yr'' / `ref_workers_`yr'') * 100
+            
+            * IWP POST
+            sum inwork_poor_post [aw=dwt] if year == `yr' & tenure_simple == `tc' & worker == 1
+            local iwp_rate_post_tenure`tc'_`yr' = r(mean) * 100
+            
+            gen temp = inwork_poor_post * dwt if year == `yr' & tenure_simple == `tc' & worker == 1
+            sum temp
+            local n_iwp_post_tenure`tc'_`yr' = r(sum)
+            drop temp
+            
+            if `ref_iwp_post_`yr'' > 0 {
+                local share_iwp_post_tenure`tc'_`yr' = (`n_iwp_post_tenure`tc'_`yr'' / `ref_iwp_post_`yr'') * 100
+            }
+            
+            * IWP PRE
+            sum inwork_poor_pre [aw=dwt] if year == `yr' & tenure_simple == `tc' & worker == 1
+            local iwp_rate_pre_tenure`tc'_`yr' = r(mean) * 100
+            
+            gen temp = inwork_poor_pre * dwt if year == `yr' & tenure_simple == `tc' & worker == 1
+            sum temp
+            local n_iwp_pre_tenure`tc'_`yr' = r(sum)
+            drop temp
+            
+            if `ref_iwp_pre_`yr'' > 0 {
+                local share_iwp_pre_tenure`tc'_`yr' = (`n_iwp_pre_tenure`tc'_`yr'' / `ref_iwp_pre_`yr'') * 100
+            }
+        }
+    }
+}
+
+*===============================================================================
+* CALCULATE STATISTICS - HOUSING COST BURDEN
+*===============================================================================
+foreach yr of local years {
+    forvalues bc = 1/3 {
+        quietly count if year == `yr' & burden_cat == `bc'
+        if r(N) == 0 {
+            local arop_rate_post_burden`bc'_`yr' = .
+            local arop_rate_pre_burden`bc'_`yr' = .
+            local iwp_rate_post_burden`bc'_`yr' = .
+            local iwp_rate_pre_burden`bc'_`yr' = .
+            local n_pop_burden`bc'_`yr' = .
+            local share_pop_burden`bc'_`yr' = .
+            local n_arop_post_burden`bc'_`yr' = .
+            local n_arop_pre_burden`bc'_`yr' = .
+            local share_arop_post_burden`bc'_`yr' = .
+            local share_arop_pre_burden`bc'_`yr' = .
+            local n_workers_burden`bc'_`yr' = .
+            local share_workers_burden`bc'_`yr' = .
+            local n_iwp_post_burden`bc'_`yr' = .
+            local n_iwp_pre_burden`bc'_`yr' = .
+            local share_iwp_post_burden`bc'_`yr' = .
+            local share_iwp_pre_burden`bc'_`yr' = .
+            continue
+        }
+        
+        * Population
+        sum dwt if year == `yr' & burden_cat == `bc'
+        local n_pop_burden`bc'_`yr' = r(sum)
+        local share_pop_burden`bc'_`yr' = (`n_pop_burden`bc'_`yr'' / `ref_pop_`yr'') * 100
+        
+        * AROP POST
+        sum arop_post [aw=dwt] if year == `yr' & burden_cat == `bc'
+        local arop_rate_post_burden`bc'_`yr' = r(mean) * 100
+        
+        gen temp = arop_post * dwt if year == `yr' & burden_cat == `bc'
+        sum temp
+        local n_arop_post_burden`bc'_`yr' = r(sum)
+        drop temp
+        
+        if `ref_arop_post_`yr'' > 0 {
+            local share_arop_post_burden`bc'_`yr' = (`n_arop_post_burden`bc'_`yr'' / `ref_arop_post_`yr'') * 100
+        }
+        
+        * AROP PRE
+        sum arop_pre [aw=dwt] if year == `yr' & burden_cat == `bc'
+        local arop_rate_pre_burden`bc'_`yr' = r(mean) * 100
+        
+        gen temp = arop_pre * dwt if year == `yr' & burden_cat == `bc'
+        sum temp
+        local n_arop_pre_burden`bc'_`yr' = r(sum)
+        drop temp
+        
+        if `ref_arop_pre_`yr'' > 0 {
+            local share_arop_pre_burden`bc'_`yr' = (`n_arop_pre_burden`bc'_`yr'' / `ref_arop_pre_`yr'') * 100
+        }
+        
+        * IWP
+        quietly count if year == `yr' & burden_cat == `bc' & worker == 1
+        if r(N) > 0 {
+            sum dwt if year == `yr' & burden_cat == `bc' & worker == 1
+            local n_workers_burden`bc'_`yr' = r(sum)
+            local share_workers_burden`bc'_`yr' = (`n_workers_burden`bc'_`yr'' / `ref_workers_`yr'') * 100
+            
+            * IWP POST
+            sum inwork_poor_post [aw=dwt] if year == `yr' & burden_cat == `bc' & worker == 1
+            local iwp_rate_post_burden`bc'_`yr' = r(mean) * 100
+            
+            gen temp = inwork_poor_post * dwt if year == `yr' & burden_cat == `bc' & worker == 1
+            sum temp
+            local n_iwp_post_burden`bc'_`yr' = r(sum)
+            drop temp
+            
+            if `ref_iwp_post_`yr'' > 0 {
+                local share_iwp_post_burden`bc'_`yr' = (`n_iwp_post_burden`bc'_`yr'' / `ref_iwp_post_`yr'') * 100
+            }
+            
+            * IWP PRE
+            sum inwork_poor_pre [aw=dwt] if year == `yr' & burden_cat == `bc' & worker == 1
+            local iwp_rate_pre_burden`bc'_`yr' = r(mean) * 100
+            
+            gen temp = inwork_poor_pre * dwt if year == `yr' & burden_cat == `bc' & worker == 1
+            sum temp
+            local n_iwp_pre_burden`bc'_`yr' = r(sum)
+            drop temp
+            
+            if `ref_iwp_pre_`yr'' > 0 {
+                local share_iwp_pre_burden`bc'_`yr' = (`n_iwp_pre_burden`bc'_`yr'' / `ref_iwp_pre_`yr'') * 100
+            }
+        }
+    }
+}
+
+*===============================================================================
+* CALCULATE STATISTICS - OVERCROWDING
+*===============================================================================
+foreach yr of local years {
+    forvalues oc = 1/2 {
+        quietly count if year == `yr' & overcrowd_cat == `oc'
+        if r(N) == 0 {
+            local arop_rate_post_overcrowd`oc'_`yr' = .
+            local arop_rate_pre_overcrowd`oc'_`yr' = .
+            local iwp_rate_post_overcrowd`oc'_`yr' = .
+            local iwp_rate_pre_overcrowd`oc'_`yr' = .
+            local n_pop_overcrowd`oc'_`yr' = .
+            local share_pop_overcrowd`oc'_`yr' = .
+            local n_arop_post_overcrowd`oc'_`yr' = .
+            local n_arop_pre_overcrowd`oc'_`yr' = .
+            local share_arop_post_overcrowd`oc'_`yr' = .
+            local share_arop_pre_overcrowd`oc'_`yr' = .
+            local n_workers_overcrowd`oc'_`yr' = .
+            local share_workers_overcrowd`oc'_`yr' = .
+            local n_iwp_post_overcrowd`oc'_`yr' = .
+            local n_iwp_pre_overcrowd`oc'_`yr' = .
+            local share_iwp_post_overcrowd`oc'_`yr' = .
+            local share_iwp_pre_overcrowd`oc'_`yr' = .
+            continue
+        }
+        
+        * Population
+        sum dwt if year == `yr' & overcrowd_cat == `oc'
+        local n_pop_overcrowd`oc'_`yr' = r(sum)
+        local share_pop_overcrowd`oc'_`yr' = (`n_pop_overcrowd`oc'_`yr'' / `ref_pop_`yr'') * 100
+        
+        * AROP POST
+        sum arop_post [aw=dwt] if year == `yr' & overcrowd_cat == `oc'
+        local arop_rate_post_overcrowd`oc'_`yr' = r(mean) * 100
+        
+        gen temp = arop_post * dwt if year == `yr' & overcrowd_cat == `oc'
+        sum temp
+        local n_arop_post_overcrowd`oc'_`yr' = r(sum)
+        drop temp
+        
+        if `ref_arop_post_`yr'' > 0 {
+            local share_arop_post_overcrowd`oc'_`yr' = (`n_arop_post_overcrowd`oc'_`yr'' / `ref_arop_post_`yr'') * 100
+        }
+        
+        * AROP PRE
+        sum arop_pre [aw=dwt] if year == `yr' & overcrowd_cat == `oc'
+        local arop_rate_pre_overcrowd`oc'_`yr' = r(mean) * 100
+        
+        gen temp = arop_pre * dwt if year == `yr' & overcrowd_cat == `oc'
+        sum temp
+        local n_arop_pre_overcrowd`oc'_`yr' = r(sum)
+        drop temp
+        
+        if `ref_arop_pre_`yr'' > 0 {
+            local share_arop_pre_overcrowd`oc'_`yr' = (`n_arop_pre_overcrowd`oc'_`yr'' / `ref_arop_pre_`yr'') * 100
+        }
+        
+        * IWP
+        quietly count if year == `yr' & overcrowd_cat == `oc' & worker == 1
+        if r(N) > 0 {
+            sum dwt if year == `yr' & overcrowd_cat == `oc' & worker == 1
+            local n_workers_overcrowd`oc'_`yr' = r(sum)
+            local share_workers_overcrowd`oc'_`yr' = (`n_workers_overcrowd`oc'_`yr'' / `ref_workers_`yr'') * 100
+            
+            * IWP POST
+            sum inwork_poor_post [aw=dwt] if year == `yr' & overcrowd_cat == `oc' & worker == 1
+            local iwp_rate_post_overcrowd`oc'_`yr' = r(mean) * 100
+            
+            gen temp = inwork_poor_post * dwt if year == `yr' & overcrowd_cat == `oc' & worker == 1
+            sum temp
+            local n_iwp_post_overcrowd`oc'_`yr' = r(sum)
+            drop temp
+            
+            if `ref_iwp_post_`yr'' > 0 {
+                local share_iwp_post_overcrowd`oc'_`yr' = (`n_iwp_post_overcrowd`oc'_`yr'' / `ref_iwp_post_`yr'') * 100
+            }
+            
+            * IWP PRE
+            sum inwork_poor_pre [aw=dwt] if year == `yr' & overcrowd_cat == `oc' & worker == 1
+            local iwp_rate_pre_overcrowd`oc'_`yr' = r(mean) * 100
+            
+            gen temp = inwork_poor_pre * dwt if year == `yr' & overcrowd_cat == `oc' & worker == 1
+            sum temp
+            local n_iwp_pre_overcrowd`oc'_`yr' = r(sum)
+            drop temp
+            
+            if `ref_iwp_pre_`yr'' > 0 {
+                local share_iwp_pre_overcrowd`oc'_`yr' = (`n_iwp_pre_overcrowd`oc'_`yr'' / `ref_iwp_pre_`yr'') * 100
+            }
+        }
+    }
+}
+
+*===============================================================================
+* CALCULATE STATISTICS - SEVERE HOUSING DEPRIVATION
+*===============================================================================
+foreach yr of local years {
+    forvalues sd = 1/2 {
+        quietly count if year == `yr' & severe_housing_depr == `sd'
+        if r(N) == 0 {
+            local arop_rate_post_sevhousing`sd'_`yr' = .
+            local arop_rate_pre_sevhousing`sd'_`yr' = .
+            local iwp_rate_post_sevhousing`sd'_`yr' = .
+            local iwp_rate_pre_sevhousing`sd'_`yr' = .
+            local n_pop_sevhousing`sd'_`yr' = .
+            local share_pop_sevhousing`sd'_`yr' = .
+            local n_arop_post_sevhousing`sd'_`yr' = .
+            local n_arop_pre_sevhousing`sd'_`yr' = .
+            local share_arop_post_sevhousing`sd'_`yr' = .
+            local share_arop_pre_sevhousing`sd'_`yr' = .
+            local n_workers_sevhousing`sd'_`yr' = .
+            local share_workers_sevhousing`sd'_`yr' = .
+            local n_iwp_post_sevhousing`sd'_`yr' = .
+            local n_iwp_pre_sevhousing`sd'_`yr' = .
+            local share_iwp_post_sevhousing`sd'_`yr' = .
+            local share_iwp_pre_sevhousing`sd'_`yr' = .
+            continue
+        }
+        
+        * Population
+        sum dwt if year == `yr' & severe_housing_depr == `sd'
+        local n_pop_sevhousing`sd'_`yr' = r(sum)
+        local share_pop_sevhousing`sd'_`yr' = (`n_pop_sevhousing`sd'_`yr'' / `ref_pop_`yr'') * 100
+        
+        * AROP POST
+        sum arop_post [aw=dwt] if year == `yr' & severe_housing_depr == `sd'
+        local arop_rate_post_sevhousing`sd'_`yr' = r(mean) * 100
+        
+        gen temp = arop_post * dwt if year == `yr' & severe_housing_depr == `sd'
+        sum temp
+        local n_arop_post_sevhousing`sd'_`yr' = r(sum)
+        drop temp
+        
+        if `ref_arop_post_`yr'' > 0 {
+            local share_arop_post_sevhousing`sd'_`yr' = (`n_arop_post_sevhousing`sd'_`yr'' / `ref_arop_post_`yr'') * 100
+        }
+        
+        * AROP PRE
+        sum arop_pre [aw=dwt] if year == `yr' & severe_housing_depr == `sd'
+        local arop_rate_pre_sevhousing`sd'_`yr' = r(mean) * 100
+        
+        gen temp = arop_pre * dwt if year == `yr' & severe_housing_depr == `sd'
+        sum temp
+        local n_arop_pre_sevhousing`sd'_`yr' = r(sum)
+        drop temp
+        
+        if `ref_arop_pre_`yr'' > 0 {
+            local share_arop_pre_sevhousing`sd'_`yr' = (`n_arop_pre_sevhousing`sd'_`yr'' / `ref_arop_pre_`yr'') * 100
+        }
+        
+        * IWP
+        quietly count if year == `yr' & severe_housing_depr == `sd' & worker == 1
+        if r(N) > 0 {
+            sum dwt if year == `yr' & severe_housing_depr == `sd' & worker == 1
+            local n_workers_sevhousing`sd'_`yr' = r(sum)
+            local share_workers_sevhousing`sd'_`yr' = (`n_workers_sevhousing`sd'_`yr'' / `ref_workers_`yr'') * 100
+            
+            * IWP POST
+            sum inwork_poor_post [aw=dwt] if year == `yr' & severe_housing_depr == `sd' & worker == 1
+            local iwp_rate_post_sevhousing`sd'_`yr' = r(mean) * 100
+            
+            gen temp = inwork_poor_post * dwt if year == `yr' & severe_housing_depr == `sd' & worker == 1
+            sum temp
+            local n_iwp_post_sevhousing`sd'_`yr' = r(sum)
+            drop temp
+            
+            if `ref_iwp_post_`yr'' > 0 {
+                local share_iwp_post_sevhousing`sd'_`yr' = (`n_iwp_post_sevhousing`sd'_`yr'' / `ref_iwp_post_`yr'') * 100
+            }
+            
+            * IWP PRE
+            sum inwork_poor_pre [aw=dwt] if year == `yr' & severe_housing_depr == `sd' & worker == 1
+            local iwp_rate_pre_sevhousing`sd'_`yr' = r(mean) * 100
+            
+            gen temp = inwork_poor_pre * dwt if year == `yr' & severe_housing_depr == `sd' & worker == 1
+            sum temp
+            local n_iwp_pre_sevhousing`sd'_`yr' = r(sum)
+            drop temp
+            
+            if `ref_iwp_pre_`yr'' > 0 {
+                local share_iwp_pre_sevhousing`sd'_`yr' = (`n_iwp_pre_sevhousing`sd'_`yr'' / `ref_iwp_pre_`yr'') * 100
+            }
+        }
+    }
+}
+
+*===============================================================================
+* CREATE EXCEL OUTPUT
+*===============================================================================
+preserve
+clear
+set obs 300
+
+gen str100 Variable = ""
+foreach yr of local years {
+    gen double Value_`yr'_pre = .
+    gen double Value_`yr'_post = .
+    gen double Value_`yr'_Ch = .
+    gen double Value_`yr'_ChPct = .
+}
+
+local row = 1
+
+*=== TENURE STATUS ===
+replace Variable = "=== POVERTY BY TENURE STATUS ===" in `row'
+local row = `row' + 1
+
+local tenure_label_1 "Owner"
+local tenure_label_2 "Tenant"
+
+forvalues tc = 1/2 {
+    replace Variable = "" in `row'
+    local row = `row' + 1
+    
+    replace Variable = "=== `tenure_label_`tc'' ===" in `row'
+    local row = `row' + 1
+    
+    replace Variable = "Share of population (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_post = `share_pop_tenure`tc'_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "AROP rate (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `arop_rate_pre_tenure`tc'_`yr'' in `row'
+        replace Value_`yr'_post = `arop_rate_post_tenure`tc'_`yr'' in `row'
+        replace Value_`yr'_Ch = `arop_rate_post_tenure`tc'_`yr'' - `arop_rate_pre_tenure`tc'_`yr'' in `row'
+        if `arop_rate_pre_tenure`tc'_`yr'' != . & `arop_rate_pre_tenure`tc'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`arop_rate_post_tenure`tc'_`yr'' - `arop_rate_pre_tenure`tc'_`yr'') / `arop_rate_pre_tenure`tc'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Share of AROP (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `share_arop_pre_tenure`tc'_`yr'' in `row'
+        replace Value_`yr'_post = `share_arop_post_tenure`tc'_`yr'' in `row'
+        replace Value_`yr'_Ch = `share_arop_post_tenure`tc'_`yr'' - `share_arop_pre_tenure`tc'_`yr'' in `row'
+        if `share_arop_pre_tenure`tc'_`yr'' != . & `share_arop_pre_tenure`tc'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`share_arop_post_tenure`tc'_`yr'' - `share_arop_pre_tenure`tc'_`yr'') / `share_arop_pre_tenure`tc'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "IWP rate (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `iwp_rate_pre_tenure`tc'_`yr'' in `row'
+        replace Value_`yr'_post = `iwp_rate_post_tenure`tc'_`yr'' in `row'
+        replace Value_`yr'_Ch = `iwp_rate_post_tenure`tc'_`yr'' - `iwp_rate_pre_tenure`tc'_`yr'' in `row'
+        if `iwp_rate_pre_tenure`tc'_`yr'' != . & `iwp_rate_pre_tenure`tc'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`iwp_rate_post_tenure`tc'_`yr'' - `iwp_rate_pre_tenure`tc'_`yr'') / `iwp_rate_pre_tenure`tc'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Share of IWP (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `share_iwp_pre_tenure`tc'_`yr'' in `row'
+        replace Value_`yr'_post = `share_iwp_post_tenure`tc'_`yr'' in `row'
+        replace Value_`yr'_Ch = `share_iwp_post_tenure`tc'_`yr'' - `share_iwp_pre_tenure`tc'_`yr'' in `row'
+        if `share_iwp_pre_tenure`tc'_`yr'' != . & `share_iwp_pre_tenure`tc'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`share_iwp_post_tenure`tc'_`yr'' - `share_iwp_pre_tenure`tc'_`yr'') / `share_iwp_pre_tenure`tc'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+}
+
+replace Variable = "" in `row'
+local row = `row' + 1
+
+*=== HOUSING COST BURDEN ===
+replace Variable = "=== POVERTY BY HOUSING COST BURDEN ===" in `row'
+local row = `row' + 1
+
+local burden_label_1 "Low (<25%)"
+local burden_label_2 "Medium (25-40%)"
+local burden_label_3 "High (>40%)"
+
+forvalues bc = 1/3 {
+    replace Variable = "" in `row'
+    local row = `row' + 1
+    
+    replace Variable = "=== `burden_label_`bc'' ===" in `row'
+    local row = `row' + 1
+    
+    replace Variable = "Share of population (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_post = `share_pop_burden`bc'_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "AROP rate (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `arop_rate_pre_burden`bc'_`yr'' in `row'
+        replace Value_`yr'_post = `arop_rate_post_burden`bc'_`yr'' in `row'
+        replace Value_`yr'_Ch = `arop_rate_post_burden`bc'_`yr'' - `arop_rate_pre_burden`bc'_`yr'' in `row'
+        if `arop_rate_pre_burden`bc'_`yr'' != . & `arop_rate_pre_burden`bc'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`arop_rate_post_burden`bc'_`yr'' - `arop_rate_pre_burden`bc'_`yr'') / `arop_rate_pre_burden`bc'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Share of AROP (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `share_arop_pre_burden`bc'_`yr'' in `row'
+        replace Value_`yr'_post = `share_arop_post_burden`bc'_`yr'' in `row'
+        replace Value_`yr'_Ch = `share_arop_post_burden`bc'_`yr'' - `share_arop_pre_burden`bc'_`yr'' in `row'
+        if `share_arop_pre_burden`bc'_`yr'' != . & `share_arop_pre_burden`bc'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`share_arop_post_burden`bc'_`yr'' - `share_arop_pre_burden`bc'_`yr'') / `share_arop_pre_burden`bc'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "IWP rate (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `iwp_rate_pre_burden`bc'_`yr'' in `row'
+        replace Value_`yr'_post = `iwp_rate_post_burden`bc'_`yr'' in `row'
+        replace Value_`yr'_Ch = `iwp_rate_post_burden`bc'_`yr'' - `iwp_rate_pre_burden`bc'_`yr'' in `row'
+        if `iwp_rate_pre_burden`bc'_`yr'' != . & `iwp_rate_pre_burden`bc'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`iwp_rate_post_burden`bc'_`yr'' - `iwp_rate_pre_burden`bc'_`yr'') / `iwp_rate_pre_burden`bc'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Share of IWP (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `share_iwp_pre_burden`bc'_`yr'' in `row'
+        replace Value_`yr'_post = `share_iwp_post_burden`bc'_`yr'' in `row'
+        replace Value_`yr'_Ch = `share_iwp_post_burden`bc'_`yr'' - `share_iwp_pre_burden`bc'_`yr'' in `row'
+        if `share_iwp_pre_burden`bc'_`yr'' != . & `share_iwp_pre_burden`bc'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`share_iwp_post_burden`bc'_`yr'' - `share_iwp_pre_burden`bc'_`yr'') / `share_iwp_pre_burden`bc'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+}
+
+replace Variable = "" in `row'
+local row = `row' + 1
+
+*=== OVERCROWDING ===
+replace Variable = "=== POVERTY BY OVERCROWDING ===" in `row'
+local row = `row' + 1
+
+local overcrowd_label_1 "Overcrowded"
+local overcrowd_label_2 "Not overcrowded"
+
+forvalues oc = 1/2 {
+    replace Variable = "" in `row'
+    local row = `row' + 1
+    
+    replace Variable = "=== `overcrowd_label_`oc'' ===" in `row'
+    local row = `row' + 1
+    
+    replace Variable = "Share of population (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_post = `share_pop_overcrowd`oc'_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "AROP rate (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `arop_rate_pre_overcrowd`oc'_`yr'' in `row'
+        replace Value_`yr'_post = `arop_rate_post_overcrowd`oc'_`yr'' in `row'
+        replace Value_`yr'_Ch = `arop_rate_post_overcrowd`oc'_`yr'' - `arop_rate_pre_overcrowd`oc'_`yr'' in `row'
+        if `arop_rate_pre_overcrowd`oc'_`yr'' != . & `arop_rate_pre_overcrowd`oc'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`arop_rate_post_overcrowd`oc'_`yr'' - `arop_rate_pre_overcrowd`oc'_`yr'') / `arop_rate_pre_overcrowd`oc'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Share of AROP (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `share_arop_pre_overcrowd`oc'_`yr'' in `row'
+        replace Value_`yr'_post = `share_arop_post_overcrowd`oc'_`yr'' in `row'
+        replace Value_`yr'_Ch = `share_arop_post_overcrowd`oc'_`yr'' - `share_arop_pre_overcrowd`oc'_`yr'' in `row'
+        if `share_arop_pre_overcrowd`oc'_`yr'' != . & `share_arop_pre_overcrowd`oc'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`share_arop_post_overcrowd`oc'_`yr'' - `share_arop_pre_overcrowd`oc'_`yr'') / `share_arop_pre_overcrowd`oc'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "IWP rate (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `iwp_rate_pre_overcrowd`oc'_`yr'' in `row'
+        replace Value_`yr'_post = `iwp_rate_post_overcrowd`oc'_`yr'' in `row'
+        replace Value_`yr'_Ch = `iwp_rate_post_overcrowd`oc'_`yr'' - `iwp_rate_pre_overcrowd`oc'_`yr'' in `row'
+        if `iwp_rate_pre_overcrowd`oc'_`yr'' != . & `iwp_rate_pre_overcrowd`oc'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`iwp_rate_post_overcrowd`oc'_`yr'' - `iwp_rate_pre_overcrowd`oc'_`yr'') / `iwp_rate_pre_overcrowd`oc'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Share of IWP (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `share_iwp_pre_overcrowd`oc'_`yr'' in `row'
+        replace Value_`yr'_post = `share_iwp_post_overcrowd`oc'_`yr'' in `row'
+        replace Value_`yr'_Ch = `share_iwp_post_overcrowd`oc'_`yr'' - `share_iwp_pre_overcrowd`oc'_`yr'' in `row'
+        if `share_iwp_pre_overcrowd`oc'_`yr'' != . & `share_iwp_pre_overcrowd`oc'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`share_iwp_post_overcrowd`oc'_`yr'' - `share_iwp_pre_overcrowd`oc'_`yr'') / `share_iwp_pre_overcrowd`oc'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+}
+
+replace Variable = "" in `row'
+local row = `row' + 1
+
+*=== SEVERE HOUSING DEPRIVATION ===
+replace Variable = "=== POVERTY BY SEVERE HOUSING DEPRIVATION ===" in `row'
+local row = `row' + 1
+
+local sevhousing_label_1 "Severe housing problem"
+local sevhousing_label_2 "No severe problem"
+
+forvalues sd = 1/2 {
+    replace Variable = "" in `row'
+    local row = `row' + 1
+    
+    replace Variable = "=== `sevhousing_label_`sd'' ===" in `row'
+    local row = `row' + 1
+    
+    replace Variable = "Share of population (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_post = `share_pop_sevhousing`sd'_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "AROP rate (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `arop_rate_pre_sevhousing`sd'_`yr'' in `row'
+        replace Value_`yr'_post = `arop_rate_post_sevhousing`sd'_`yr'' in `row'
+        replace Value_`yr'_Ch = `arop_rate_post_sevhousing`sd'_`yr'' - `arop_rate_pre_sevhousing`sd'_`yr'' in `row'
+        if `arop_rate_pre_sevhousing`sd'_`yr'' != . & `arop_rate_pre_sevhousing`sd'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`arop_rate_post_sevhousing`sd'_`yr'' - `arop_rate_pre_sevhousing`sd'_`yr'') / `arop_rate_pre_sevhousing`sd'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Share of AROP (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `share_arop_pre_sevhousing`sd'_`yr'' in `row'
+        replace Value_`yr'_post = `share_arop_post_sevhousing`sd'_`yr'' in `row'
+        replace Value_`yr'_Ch = `share_arop_post_sevhousing`sd'_`yr'' - `share_arop_pre_sevhousing`sd'_`yr'' in `row'
+        if `share_arop_pre_sevhousing`sd'_`yr'' != . & `share_arop_pre_sevhousing`sd'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`share_arop_post_sevhousing`sd'_`yr'' - `share_arop_pre_sevhousing`sd'_`yr'') / `share_arop_pre_sevhousing`sd'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "IWP rate (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `iwp_rate_pre_sevhousing`sd'_`yr'' in `row'
+        replace Value_`yr'_post = `iwp_rate_post_sevhousing`sd'_`yr'' in `row'
+        replace Value_`yr'_Ch = `iwp_rate_post_sevhousing`sd'_`yr'' - `iwp_rate_pre_sevhousing`sd'_`yr'' in `row'
+        if `iwp_rate_pre_sevhousing`sd'_`yr'' != . & `iwp_rate_pre_sevhousing`sd'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`iwp_rate_post_sevhousing`sd'_`yr'' - `iwp_rate_pre_sevhousing`sd'_`yr'') / `iwp_rate_pre_sevhousing`sd'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Share of IWP (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `share_iwp_pre_sevhousing`sd'_`yr'' in `row'
+        replace Value_`yr'_post = `share_iwp_post_sevhousing`sd'_`yr'' in `row'
+        replace Value_`yr'_Ch = `share_iwp_post_sevhousing`sd'_`yr'' - `share_iwp_pre_sevhousing`sd'_`yr'' in `row'
+        if `share_iwp_pre_sevhousing`sd'_`yr'' != . & `share_iwp_pre_sevhousing`sd'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`share_iwp_post_sevhousing`sd'_`yr'' - `share_iwp_pre_sevhousing`sd'_`yr'') / `share_iwp_pre_sevhousing`sd'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+}
+
+keep if Variable != ""
+
+foreach yr of local years {
+    format Value_`yr'_pre %15.2f
+    format Value_`yr'_post %15.2f
+    format Value_`yr'_Ch %15.2f
+    format Value_`yr'_ChPct %15.2f
+}
+
+export excel "$output/Poverty_Housing_PrePost.xlsx", replace sheet("Housing") firstrow(variables)
+
+restore
+
+di as result _n "=== HOUSING ANALYSIS COMPLETE ===" _n
