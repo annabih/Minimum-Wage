@@ -148,30 +148,33 @@ else {
     gen ind_cat = .
 }
 
-* CONTRACT TYPE
+* CONTRACT TYPE (PL141 - 4 Kategorien)
 capture confirm variable PL141
 if _rc == 0 {
     gen contract_cat = .
-    replace contract_cat = 1 if PL140 == 1  */ Permanent
-    replace contract_cat = 2 if PL140 == 2  // Temporary
+    replace contract_cat = 1 if PL141 == 21  */ Permanent written
+    replace contract_cat = 2 if PL141 == 22  */ Permanent verbal
+    replace contract_cat = 3 if PL141 == 11  */ Fixed-term written
+    replace contract_cat = 4 if PL141 == 12  */ Fixed-term verbal
     
-    label define contract_lbl 1 "Permanent" 2 "Temporary"
+    label define contract_lbl 1 "Permanent (written)" 2 "Permanent (verbal)" 3 "Fixed-term (written)" 4 "Fixed-term (verbal)"
     label values contract_cat contract_lbl
 }
 else {
     gen contract_cat = .
 }
 
-* EMPLOYMENT STATUS
-capture confirm variable PL031
+
+* EMPLOYMENT STATUS (PL040A)
+capture confirm variable PL040A
 if _rc == 0 {
     gen empl_status = .
-    replace empl_status = 1 if PL031 == 1  // Employee full-time
-    replace empl_status = 2 if PL031 == 2  // Employee part-time
-    replace empl_status = 3 if PL031 == 3  // Self-employed full-time
-    replace empl_status = 4 if PL031 == 4  // Self-employed part-time
+    replace empl_status = 1 if PL040A == 1  */ Self-employed with employees
+    replace empl_status = 2 if PL040A == 2  */ Self-employed without employees
+    replace empl_status = 3 if PL040A == 3  */ Employee
+    replace empl_status = 4 if PL040A == 4  */ Family worker (unpaid)
     
-    label define empl_lbl 1 "Employee FT" 2 "Employee PT" 3 "Self-employed FT" 4 "Self-employed PT"
+    label define empl_lbl 1 "Self-employed (with employees)" 2 "Self-employed (without employees)" 3 "Employee" 4 "Family worker"
     label values empl_status empl_lbl
 }
 else {
