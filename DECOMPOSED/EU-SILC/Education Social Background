@@ -1,0 +1,755 @@
+*******************************************************************************************************************************************************************************************
+*** Titel: Education and Social Background Poverty Analysis - PRE/POST TRANSFER - EU-SILC Austria 2017-2024
+*** Date: 30.01.2026
+*** Variables: Education level (ISCED), Parents' origin, Parents' occupation
+*******************************************************************************************************************************************************************************************
+clear all
+set more off
+
+use "D:\Data\AT_CROSS\SILC_CrossSec_AllYears_2015_2024.dta"
+global output "D:\InWorkPoverty_SILC"
+
+local years "2017 2018 2019 2020 2021 2022 2023 2024"
+
+di _n "=== EDUCATION ANALYSIS START ===" _n
+
+*===============================================================================
+* DESTRING VARIABLES
+*===============================================================================
+local numeric_vars "HX090 HY023 HX050 RB050 PB040 RX010 PX010 PL073 PL074 PL075 PL076 year PE040 PB220 PB230 PB210 PB200"
+
+foreach var of local numeric_vars {
+    capture confirm variable `var'
+    if _rc == 0 {
+        capture confirm string variable `var'
+        if _rc == 0 {
+            replace `var' = subinstr(`var', ",", ".", .)
+            destring `var', replace force
+        }
+    }
+}
+
+*===============================================================================
+* BASIC VARIABLES
+*===============================================================================
+capture confirm variable RB050
+if _rc == 0 {
+    gen dwt = RB050
+}
+else {
+    gen dwt = PB040
+}
+
+capture confirm variable RX010
+if _rc == 0 {
+    gen age = RX010
+}
+else {
+    gen age = PX010
+}
+
+gen months_worked = 0
+foreach var in PL073 PL074 PL075 PL076 {
+    capture confirm variable `var'
+    if _rc == 0 {
+        replace months_worked = months_worked + `var' if !missing(`var')
+    }
+}
+replace months_worked = 12 if months_worked > 12 & !missing(months_worked)
+
+* POST-TRANSFER
+gen eq_hh_ils_post = HX090
+label variable eq_hh_ils_post "Equivalised income POST-transfer"
+
+* PRE-TRANSFER
+gen eq_hh_ils_pre = HY023 / HX050 if !missing(HY023) & !missing(HX050) & HX050 > 0
+label variable eq_hh_ils_pre "Equivalised income PRE-transfer"
+
+drop if missing(eq_hh_ils_post) | missing(dwt) | missing(age)
+
+*===============================================================================
+* POVERTY THRESHOLD
+*===============================================================================
+tempfile thresholds
+tempname h
+postfile `h' int year double median_eq_hh_ils pov_threshold_60 using `thresholds', replace
+
+foreach yr of local years {
+    quietly count if year==`yr'
+    if r(N)==0 continue
+    quietly _pctile eq_hh_ils_post [pw=dwt] if year==`yr', p(50)
+    local median_val = r(r1)
+    post `h' (`yr') (`median_val') (0.60*`median_val')
+}
+postclose `h'
+
+merge m:1 year using `thresholds', nogen
+replace pov_threshold_60 = round(pov_threshold_60, 1)
+
+*===============================================================================
+* POVERTY STATUS
+*===============================================================================
+gen byte arop_post = (eq_hh_ils_post < pov_threshold_60) if !missing(pov_threshold_60)
+gen byte arop_pre = (eq_hh_ils_pre < pov_threshold_60) if !missing(pov_threshold_60) & !missing(eq_hh_ils_pre)
+
+gen worker = (months_worked > 6 & age >= 18 & age <= 64)
+gen inwork_poor_post = (worker == 1 & arop_post == 1)
+gen inwork_poor_pre = (worker == 1 & arop_pre == 1)
+
+*===============================================================================
+* EDUCATION CLASSIFICATIONS
+*===============================================================================
+di _n "=== Creating education classifications ===" _n
+
+* EDUCATION LEVEL (ISCED)
+capture confirm variable PE040
+if _rc == 0 {
+    gen educ_cat = .
+    replace educ_cat = 1 if PE040 == 0 | PE040 == 100  // Pre-primary
+    replace educ_cat = 2 if PE040 == 200               // Primary
+    replace educ_cat = 3 if PE040 == 300 | PE040 == 344 | PE040 == 353 | PE040 == 354  // Lower secondary
+    replace educ_cat = 4 if PE040 == 400 | PE040 == 450 | PE040 == 453 | PE040 == 454  // Upper secondary
+    replace educ_cat = 5 if PE040 == 500               // Post-secondary non-tertiary
+    replace educ_cat = 6 if PE040 == 600 | PE040 == 650 | PE040 == 660  // Short-cycle tertiary
+    replace educ_cat = 7 if PE040 == 700 | PE040 == 710 | PE040 == 720 | PE040 == 760 | PE040 == 766 | PE040 == 767  // Bachelor or equivalent
+    replace educ_cat = 8 if PE040 == 800               // Master or equivalent
+    
+    label define educ_lbl 1 "Pre-primary" 2 "Primary" 3 "Lower secondary" 4 "Upper secondary" 5 "Post-secondary" 6 "Short tertiary" 7 "Bachelor" 8 "Master+"
+    label values educ_cat educ_lbl
+    
+    * Simplified: Low/Medium/High
+    gen educ_simple = .
+    replace educ_simple = 1 if inlist(educ_cat, 1, 2, 3)  // Low (ISCED 0-2)
+    replace educ_simple = 2 if inlist(educ_cat, 4, 5)     // Medium (ISCED 3-4)
+    replace educ_simple = 3 if inlist(educ_cat, 6, 7, 8)  // High (ISCED 5-8)
+    
+    label define educ_simple_lbl 1 "Low (ISCED 0-2)" 2 "Medium (ISCED 3-4)" 3 "High (ISCED 5-8)"
+    label values educ_simple educ_simple_lbl
+}
+else {
+    gen educ_cat = .
+    gen educ_simple = .
+}
+
+* MIGRATION BACKGROUND
+capture confirm variable PB220
+capture confirm variable PB230
+if _rc == 0 {
+    gen migr_cat = .
+    replace migr_cat = 1 if PB220 == 1 & PB230 == 1  // No migration background
+    replace migr_cat = 2 if (PB220 != 1 | PB230 != 1) & !missing(PB220) & !missing(PB230)  // Migration background
+    
+    label define migr_lbl 1 "Native" 2 "Migration background"
+    label values migr_cat migr_lbl
+}
+else {
+    gen migr_cat = .
+}
+
+* PARENTS' OCCUPATION (highest ISCO level)
+capture confirm variable PB210
+capture confirm variable PB200
+if _rc == 0 {
+    * Father's occupation
+    gen father_occ = .
+    replace father_occ = 1 if PB210 >= 1000 & PB210 < 2000  // Managers
+    replace father_occ = 2 if PB210 >= 2000 & PB210 < 3000  // Professionals
+    replace father_occ = 3 if PB210 >= 3000 & PB210 < 4000  // Technicians
+    replace father_occ = 4 if PB210 >= 4000 & PB210 < 5000  // Clerical
+    replace father_occ = 5 if PB210 >= 5000 & PB210 < 6000  // Service/Sales
+    replace father_occ = 6 if PB210 >= 6000 & PB210 < 7000  // Agriculture
+    replace father_occ = 7 if PB210 >= 7000 & PB210 < 8000  // Craft
+    replace father_occ = 8 if PB210 >= 8000 & PB210 < 9000  // Operators
+    replace father_occ = 9 if PB210 >= 9000 & PB210 < 10000 // Elementary
+    
+    * Mother's occupation
+    gen mother_occ = .
+    replace mother_occ = 1 if PB200 >= 1000 & PB200 < 2000
+    replace mother_occ = 2 if PB200 >= 2000 & PB200 < 3000
+    replace mother_occ = 3 if PB200 >= 3000 & PB200 < 4000
+    replace mother_occ = 4 if PB200 >= 4000 & PB200 < 5000
+    replace mother_occ = 5 if PB200 >= 5000 & PB200 < 6000
+    replace mother_occ = 6 if PB200 >= 6000 & PB200 < 7000
+    replace mother_occ = 7 if PB200 >= 7000 & PB200 < 8000
+    replace mother_occ = 8 if PB200 >= 8000 & PB200 < 9000
+    replace mother_occ = 9 if PB200 >= 9000 & PB200 < 10000
+    
+    * Highest parental occupation
+    gen parent_occ_cat = .
+    replace parent_occ_cat = min(father_occ, mother_occ) if !missing(father_occ) | !missing(mother_occ)
+    replace parent_occ_cat = father_occ if missing(mother_occ) & !missing(father_occ)
+    replace parent_occ_cat = mother_occ if missing(father_occ) & !missing(mother_occ)
+    
+    * Simplified: High/Medium/Low skilled
+    gen parent_skill = .
+    replace parent_skill = 1 if inlist(parent_occ_cat, 1, 2, 3)  // High skilled
+    replace parent_skill = 2 if inlist(parent_occ_cat, 4, 5, 7)  // Medium skilled
+    replace parent_skill = 3 if inlist(parent_occ_cat, 6, 8, 9)  // Low skilled
+    
+    label define parent_skill_lbl 1 "High skilled parents" 2 "Medium skilled parents" 3 "Low skilled parents"
+    label values parent_skill parent_skill_lbl
+}
+else {
+    gen parent_occ_cat = .
+    gen parent_skill = .
+}
+
+*===============================================================================
+* REFERENCE TOTALS
+*===============================================================================
+foreach yr of local years {
+    quietly count if year == `yr'
+    if r(N) == 0 continue
+    
+    sum dwt if year == `yr'
+    local ref_pop_`yr' = r(sum)
+    
+    gen temp_arop_post = arop_post * dwt if year == `yr'
+    sum temp_arop_post
+    local ref_arop_post_`yr' = r(sum)
+    drop temp_arop_post
+    
+    gen temp_arop_pre = arop_pre * dwt if year == `yr'
+    sum temp_arop_pre
+    local ref_arop_pre_`yr' = r(sum)
+    drop temp_arop_pre
+    
+    sum dwt if year == `yr' & worker == 1
+    local ref_workers_`yr' = r(sum)
+    
+    gen temp_iwp_post = inwork_poor_post * dwt if year == `yr' & worker == 1
+    sum temp_iwp_post
+    local ref_iwp_post_`yr' = r(sum)
+    drop temp_iwp_post
+    
+    gen temp_iwp_pre = inwork_poor_pre * dwt if year == `yr' & worker == 1
+    sum temp_iwp_pre
+    local ref_iwp_pre_`yr' = r(sum)
+    drop temp_iwp_pre
+}
+
+*===============================================================================
+* CALCULATE STATISTICS - EDUCATION LEVEL (SIMPLE)
+*===============================================================================
+di _n "=== Calculating statistics by education level ===" _n
+
+foreach yr of local years {
+    forvalues ec = 1/3 {
+        quietly count if year == `yr' & educ_simple == `ec'
+        if r(N) == 0 {
+            local arop_rate_post_educ`ec'_`yr' = .
+            local arop_rate_pre_educ`ec'_`yr' = .
+            local iwp_rate_post_educ`ec'_`yr' = .
+            local iwp_rate_pre_educ`ec'_`yr' = .
+            local n_pop_educ`ec'_`yr' = .
+            local n_arop_post_educ`ec'_`yr' = .
+            local n_arop_pre_educ`ec'_`yr' = .
+            local n_workers_educ`ec'_`yr' = .
+            local n_iwp_post_educ`ec'_`yr' = .
+            local n_iwp_pre_educ`ec'_`yr' = .
+            local share_pop_educ`ec'_`yr' = .
+            local share_arop_post_educ`ec'_`yr' = .
+            local share_arop_pre_educ`ec'_`yr' = .
+            local share_workers_educ`ec'_`yr' = .
+            local share_iwp_post_educ`ec'_`yr' = .
+            local share_iwp_pre_educ`ec'_`yr' = .
+            continue
+        }
+        
+        * Population
+        sum dwt if year == `yr' & educ_simple == `ec'
+        local n_pop_educ`ec'_`yr' = r(sum)
+        local share_pop_educ`ec'_`yr' = (`n_pop_educ`ec'_`yr'' / `ref_pop_`yr'') * 100
+        
+        * AROP POST
+        sum arop_post [aw=dwt] if year == `yr' & educ_simple == `ec'
+        local arop_rate_post_educ`ec'_`yr' = r(mean) * 100
+        
+        gen temp = arop_post * dwt if year == `yr' & educ_simple == `ec'
+        sum temp
+        local n_arop_post_educ`ec'_`yr' = r(sum)
+        drop temp
+        
+        if `ref_arop_post_`yr'' > 0 {
+            local share_arop_post_educ`ec'_`yr' = (`n_arop_post_educ`ec'_`yr'' / `ref_arop_post_`yr'') * 100
+        }
+        
+        * AROP PRE
+        sum arop_pre [aw=dwt] if year == `yr' & educ_simple == `ec'
+        local arop_rate_pre_educ`ec'_`yr' = r(mean) * 100
+        
+        gen temp = arop_pre * dwt if year == `yr' & educ_simple == `ec'
+        sum temp
+        local n_arop_pre_educ`ec'_`yr' = r(sum)
+        drop temp
+        
+        if `ref_arop_pre_`yr'' > 0 {
+            local share_arop_pre_educ`ec'_`yr' = (`n_arop_pre_educ`ec'_`yr'' / `ref_arop_pre_`yr'') * 100
+        }
+        
+        * IWP
+        quietly count if year == `yr' & educ_simple == `ec' & worker == 1
+        if r(N) > 0 {
+            sum dwt if year == `yr' & educ_simple == `ec' & worker == 1
+            local n_workers_educ`ec'_`yr' = r(sum)
+            local share_workers_educ`ec'_`yr' = (`n_workers_educ`ec'_`yr'' / `ref_workers_`yr'') * 100
+            
+            * IWP POST
+            sum inwork_poor_post [aw=dwt] if year == `yr' & educ_simple == `ec' & worker == 1
+            local iwp_rate_post_educ`ec'_`yr' = r(mean) * 100
+            
+            gen temp = inwork_poor_post * dwt if year == `yr' & educ_simple == `ec' & worker == 1
+            sum temp
+            local n_iwp_post_educ`ec'_`yr' = r(sum)
+            drop temp
+            
+            if `ref_iwp_post_`yr'' > 0 {
+                local share_iwp_post_educ`ec'_`yr' = (`n_iwp_post_educ`ec'_`yr'' / `ref_iwp_post_`yr'') * 100
+            }
+            
+            * IWP PRE
+            sum inwork_poor_pre [aw=dwt] if year == `yr' & educ_simple == `ec' & worker == 1
+            local iwp_rate_pre_educ`ec'_`yr' = r(mean) * 100
+            
+            gen temp = inwork_poor_pre * dwt if year == `yr' & educ_simple == `ec' & worker == 1
+            sum temp
+            local n_iwp_pre_educ`ec'_`yr' = r(sum)
+            drop temp
+            
+            if `ref_iwp_pre_`yr'' > 0 {
+                local share_iwp_pre_educ`ec'_`yr' = (`n_iwp_pre_educ`ec'_`yr'' / `ref_iwp_pre_`yr'') * 100
+            }
+        }
+        else {
+            local n_workers_educ`ec'_`yr' = .
+            local share_workers_educ`ec'_`yr' = .
+            local iwp_rate_post_educ`ec'_`yr' = .
+            local iwp_rate_pre_educ`ec'_`yr' = .
+            local n_iwp_post_educ`ec'_`yr' = .
+            local n_iwp_pre_educ`ec'_`yr' = .
+            local share_iwp_post_educ`ec'_`yr' = .
+            local share_iwp_pre_educ`ec'_`yr' = .
+        }
+    }
+}
+
+*===============================================================================
+* CALCULATE STATISTICS - MIGRATION BACKGROUND
+*===============================================================================
+foreach yr of local years {
+    forvalues mc = 1/2 {
+        quietly count if year == `yr' & migr_cat == `mc'
+        if r(N) == 0 {
+            local arop_rate_post_migr`mc'_`yr' = .
+            local arop_rate_pre_migr`mc'_`yr' = .
+            local iwp_rate_post_migr`mc'_`yr' = .
+            local iwp_rate_pre_migr`mc'_`yr' = .
+            local n_pop_migr`mc'_`yr' = .
+            local share_pop_migr`mc'_`yr' = .
+            local n_arop_post_migr`mc'_`yr' = .
+            local n_arop_pre_migr`mc'_`yr' = .
+            local share_arop_post_migr`mc'_`yr' = .
+            local share_arop_pre_migr`mc'_`yr' = .
+            local n_workers_migr`mc'_`yr' = .
+            local share_workers_migr`mc'_`yr' = .
+            local n_iwp_post_migr`mc'_`yr' = .
+            local n_iwp_pre_migr`mc'_`yr' = .
+            local share_iwp_post_migr`mc'_`yr' = .
+            local share_iwp_pre_migr`mc'_`yr' = .
+            continue
+        }
+        
+        * Population
+        sum dwt if year == `yr' & migr_cat == `mc'
+        local n_pop_migr`mc'_`yr' = r(sum)
+        local share_pop_migr`mc'_`yr' = (`n_pop_migr`mc'_`yr'' / `ref_pop_`yr'') * 100
+        
+        * AROP POST
+        sum arop_post [aw=dwt] if year == `yr' & migr_cat == `mc'
+        local arop_rate_post_migr`mc'_`yr' = r(mean) * 100
+        
+        gen temp = arop_post * dwt if year == `yr' & migr_cat == `mc'
+        sum temp
+        local n_arop_post_migr`mc'_`yr' = r(sum)
+        drop temp
+        
+        if `ref_arop_post_`yr'' > 0 {
+            local share_arop_post_migr`mc'_`yr' = (`n_arop_post_migr`mc'_`yr'' / `ref_arop_post_`yr'') * 100
+        }
+        
+        * AROP PRE
+        sum arop_pre [aw=dwt] if year == `yr' & migr_cat == `mc'
+        local arop_rate_pre_migr`mc'_`yr' = r(mean) * 100
+        
+        gen temp = arop_pre * dwt if year == `yr' & migr_cat == `mc'
+        sum temp
+        local n_arop_pre_migr`mc'_`yr' = r(sum)
+        drop temp
+        
+        if `ref_arop_pre_`yr'' > 0 {
+            local share_arop_pre_migr`mc'_`yr' = (`n_arop_pre_migr`mc'_`yr'' / `ref_arop_pre_`yr'') * 100
+        }
+        
+        * IWP
+        quietly count if year == `yr' & migr_cat == `mc' & worker == 1
+        if r(N) > 0 {
+            sum dwt if year == `yr' & migr_cat == `mc' & worker == 1
+            local n_workers_migr`mc'_`yr' = r(sum)
+            local share_workers_migr`mc'_`yr' = (`n_workers_migr`mc'_`yr'' / `ref_workers_`yr'') * 100
+            
+            * IWP POST
+            sum inwork_poor_post [aw=dwt] if year == `yr' & migr_cat == `mc' & worker == 1
+            local iwp_rate_post_migr`mc'_`yr' = r(mean) * 100
+            
+            gen temp = inwork_poor_post * dwt if year == `yr' & migr_cat == `mc' & worker == 1
+            sum temp
+            local n_iwp_post_migr`mc'_`yr' = r(sum)
+            drop temp
+            
+            if `ref_iwp_post_`yr'' > 0 {
+                local share_iwp_post_migr`mc'_`yr' = (`n_iwp_post_migr`mc'_`yr'' / `ref_iwp_post_`yr'') * 100
+            }
+            
+            * IWP PRE
+            sum inwork_poor_pre [aw=dwt] if year == `yr' & migr_cat == `mc' & worker == 1
+            local iwp_rate_pre_migr`mc'_`yr' = r(mean) * 100
+            
+            gen temp = inwork_poor_pre * dwt if year == `yr' & migr_cat == `mc' & worker == 1
+            sum temp
+            local n_iwp_pre_migr`mc'_`yr' = r(sum)
+            drop temp
+            
+            if `ref_iwp_pre_`yr'' > 0 {
+                local share_iwp_pre_migr`mc'_`yr' = (`n_iwp_pre_migr`mc'_`yr'' / `ref_iwp_pre_`yr'') * 100
+            }
+        }
+    }
+}
+
+*===============================================================================
+* CALCULATE STATISTICS - PARENTAL BACKGROUND
+*===============================================================================
+foreach yr of local years {
+    forvalues ps = 1/3 {
+        quietly count if year == `yr' & parent_skill == `ps'
+        if r(N) == 0 {
+            local arop_rate_post_parent`ps'_`yr' = .
+            local arop_rate_pre_parent`ps'_`yr' = .
+            local iwp_rate_post_parent`ps'_`yr' = .
+            local iwp_rate_pre_parent`ps'_`yr' = .
+            local n_pop_parent`ps'_`yr' = .
+            local share_pop_parent`ps'_`yr' = .
+            local n_arop_post_parent`ps'_`yr' = .
+            local n_arop_pre_parent`ps'_`yr' = .
+            local share_arop_post_parent`ps'_`yr' = .
+            local share_arop_pre_parent`ps'_`yr' = .
+            local n_workers_parent`ps'_`yr' = .
+            local share_workers_parent`ps'_`yr' = .
+            local n_iwp_post_parent`ps'_`yr' = .
+            local n_iwp_pre_parent`ps'_`yr' = .
+            local share_iwp_post_parent`ps'_`yr' = .
+            local share_iwp_pre_parent`ps'_`yr' = .
+            continue
+        }
+        
+        * Population
+        sum dwt if year == `yr' & parent_skill == `ps'
+        local n_pop_parent`ps'_`yr' = r(sum)
+        local share_pop_parent`ps'_`yr' = (`n_pop_parent`ps'_`yr'' / `ref_pop_`yr'') * 100
+        
+        * AROP POST
+        sum arop_post [aw=dwt] if year == `yr' & parent_skill == `ps'
+        local arop_rate_post_parent`ps'_`yr' = r(mean) * 100
+        
+        gen temp = arop_post * dwt if year == `yr' & parent_skill == `ps'
+        sum temp
+        local n_arop_post_parent`ps'_`yr' = r(sum)
+        drop temp
+        
+        if `ref_arop_post_`yr'' > 0 {
+            local share_arop_post_parent`ps'_`yr' = (`n_arop_post_parent`ps'_`yr'' / `ref_arop_post_`yr'') * 100
+        }
+        
+        * AROP PRE
+        sum arop_pre [aw=dwt] if year == `yr' & parent_skill == `ps'
+        local arop_rate_pre_parent`ps'_`yr' = r(mean) * 100
+        
+        gen temp = arop_pre * dwt if year == `yr' & parent_skill == `ps'
+        sum temp
+        local n_arop_pre_parent`ps'_`yr' = r(sum)
+        drop temp
+        
+        if `ref_arop_pre_`yr'' > 0 {
+            local share_arop_pre_parent`ps'_`yr' = (`n_arop_pre_parent`ps'_`yr'' / `ref_arop_pre_`yr'') * 100
+        }
+        
+        * IWP
+        quietly count if year == `yr' & parent_skill == `ps' & worker == 1
+        if r(N) > 0 {
+            sum dwt if year == `yr' & parent_skill == `ps' & worker == 1
+            local n_workers_parent`ps'_`yr' = r(sum)
+            local share_workers_parent`ps'_`yr' = (`n_workers_parent`ps'_`yr'' / `ref_workers_`yr'') * 100
+            
+            * IWP POST
+            sum inwork_poor_post [aw=dwt] if year == `yr' & parent_skill == `ps' & worker == 1
+            local iwp_rate_post_parent`ps'_`yr' = r(mean) * 100
+            
+            gen temp = inwork_poor_post * dwt if year == `yr' & parent_skill == `ps' & worker == 1
+            sum temp
+            local n_iwp_post_parent`ps'_`yr' = r(sum)
+            drop temp
+            
+            if `ref_iwp_post_`yr'' > 0 {
+                local share_iwp_post_parent`ps'_`yr' = (`n_iwp_post_parent`ps'_`yr'' / `ref_iwp_post_`yr'') * 100
+            }
+            
+            * IWP PRE
+            sum inwork_poor_pre [aw=dwt] if year == `yr' & parent_skill == `ps' & worker == 1
+            local iwp_rate_pre_parent`ps'_`yr' = r(mean) * 100
+            
+            gen temp = inwork_poor_pre * dwt if year == `yr' & parent_skill == `ps' & worker == 1
+            sum temp
+            local n_iwp_pre_parent`ps'_`yr' = r(sum)
+            drop temp
+            
+            if `ref_iwp_pre_`yr'' > 0 {
+                local share_iwp_pre_parent`ps'_`yr' = (`n_iwp_pre_parent`ps'_`yr'' / `ref_iwp_pre_`yr'') * 100
+            }
+        }
+    }
+}
+
+*===============================================================================
+* CREATE EXCEL OUTPUT
+*===============================================================================
+preserve
+clear
+set obs 300
+
+gen str100 Variable = ""
+foreach yr of local years {
+    gen double Value_`yr'_pre = .
+    gen double Value_`yr'_post = .
+    gen double Value_`yr'_Ch = .
+    gen double Value_`yr'_ChPct = .
+}
+
+local row = 1
+
+*=== EDUCATION LEVEL ===
+replace Variable = "=== POVERTY BY EDUCATION LEVEL ===" in `row'
+local row = `row' + 1
+
+local educ_label_1 "Low (ISCED 0-2)"
+local educ_label_2 "Medium (ISCED 3-4)"
+local educ_label_3 "High (ISCED 5-8)"
+
+forvalues ec = 1/3 {
+    replace Variable = "" in `row'
+    local row = `row' + 1
+    
+    replace Variable = "=== `educ_label_`ec'' ===" in `row'
+    local row = `row' + 1
+    
+    replace Variable = "Share of population (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_post = `share_pop_educ`ec'_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "AROP rate (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `arop_rate_pre_educ`ec'_`yr'' in `row'
+        replace Value_`yr'_post = `arop_rate_post_educ`ec'_`yr'' in `row'
+        replace Value_`yr'_Ch = `arop_rate_post_educ`ec'_`yr'' - `arop_rate_pre_educ`ec'_`yr'' in `row'
+        if `arop_rate_pre_educ`ec'_`yr'' != . & `arop_rate_pre_educ`ec'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`arop_rate_post_educ`ec'_`yr'' - `arop_rate_pre_educ`ec'_`yr'') / `arop_rate_pre_educ`ec'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Share of AROP (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `share_arop_pre_educ`ec'_`yr'' in `row'
+        replace Value_`yr'_post = `share_arop_post_educ`ec'_`yr'' in `row'
+        replace Value_`yr'_Ch = `share_arop_post_educ`ec'_`yr'' - `share_arop_pre_educ`ec'_`yr'' in `row'
+        if `share_arop_pre_educ`ec'_`yr'' != . & `share_arop_pre_educ`ec'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`share_arop_post_educ`ec'_`yr'' - `share_arop_pre_educ`ec'_`yr'') / `share_arop_pre_educ`ec'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "IWP rate (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `iwp_rate_pre_educ`ec'_`yr'' in `row'
+        replace Value_`yr'_post = `iwp_rate_post_educ`ec'_`yr'' in `row'
+        replace Value_`yr'_Ch = `iwp_rate_post_educ`ec'_`yr'' - `iwp_rate_pre_educ`ec'_`yr'' in `row'
+        if `iwp_rate_pre_educ`ec'_`yr'' != . & `iwp_rate_pre_educ`ec'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`iwp_rate_post_educ`ec'_`yr'' - `iwp_rate_pre_educ`ec'_`yr'') / `iwp_rate_pre_educ`ec'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Share of IWP (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `share_iwp_pre_educ`ec'_`yr'' in `row'
+        replace Value_`yr'_post = `share_iwp_post_educ`ec'_`yr'' in `row'
+        replace Value_`yr'_Ch = `share_iwp_post_educ`ec'_`yr'' - `share_iwp_pre_educ`ec'_`yr'' in `row'
+        if `share_iwp_pre_educ`ec'_`yr'' != . & `share_iwp_pre_educ`ec'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`share_iwp_post_educ`ec'_`yr'' - `share_iwp_pre_educ`ec'_`yr'') / `share_iwp_pre_educ`ec'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+}
+
+replace Variable = "" in `row'
+local row = `row' + 1
+
+*=== MIGRATION BACKGROUND ===
+replace Variable = "=== POVERTY BY MIGRATION BACKGROUND ===" in `row'
+local row = `row' + 1
+
+local migr_label_1 "Native"
+local migr_label_2 "Migration background"
+
+forvalues mc = 1/2 {
+    replace Variable = "" in `row'
+    local row = `row' + 1
+    
+    replace Variable = "=== `migr_label_`mc'' ===" in `row'
+    local row = `row' + 1
+    
+    replace Variable = "Share of population (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_post = `share_pop_migr`mc'_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "AROP rate (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `arop_rate_pre_migr`mc'_`yr'' in `row'
+        replace Value_`yr'_post = `arop_rate_post_migr`mc'_`yr'' in `row'
+        replace Value_`yr'_Ch = `arop_rate_post_migr`mc'_`yr'' - `arop_rate_pre_migr`mc'_`yr'' in `row'
+        if `arop_rate_pre_migr`mc'_`yr'' != . & `arop_rate_pre_migr`mc'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`arop_rate_post_migr`mc'_`yr'' - `arop_rate_pre_migr`mc'_`yr'') / `arop_rate_pre_migr`mc'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Share of AROP (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `share_arop_pre_migr`mc'_`yr'' in `row'
+        replace Value_`yr'_post = `share_arop_post_migr`mc'_`yr'' in `row'
+        replace Value_`yr'_Ch = `share_arop_post_migr`mc'_`yr'' - `share_arop_pre_migr`mc'_`yr'' in `row'
+        if `share_arop_pre_migr`mc'_`yr'' != . & `share_arop_pre_migr`mc'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`share_arop_post_migr`mc'_`yr'' - `share_arop_pre_migr`mc'_`yr'') / `share_arop_pre_migr`mc'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "IWP rate (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `iwp_rate_pre_migr`mc'_`yr'' in `row'
+        replace Value_`yr'_post = `iwp_rate_post_migr`mc'_`yr'' in `row'
+        replace Value_`yr'_Ch = `iwp_rate_post_migr`mc'_`yr'' - `iwp_rate_pre_migr`mc'_`yr'' in `row'
+        if `iwp_rate_pre_migr`mc'_`yr'' != . & `iwp_rate_pre_migr`mc'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`iwp_rate_post_migr`mc'_`yr'' - `iwp_rate_pre_migr`mc'_`yr'') / `iwp_rate_pre_migr`mc'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Share of IWP (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `share_iwp_pre_migr`mc'_`yr'' in `row'
+        replace Value_`yr'_post = `share_iwp_post_migr`mc'_`yr'' in `row'
+        replace Value_`yr'_Ch = `share_iwp_post_migr`mc'_`yr'' - `share_iwp_pre_migr`mc'_`yr'' in `row'
+        if `share_iwp_pre_migr`mc'_`yr'' != . & `share_iwp_pre_migr`mc'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`share_iwp_post_migr`mc'_`yr'' - `share_iwp_pre_migr`mc'_`yr'') / `share_iwp_pre_migr`mc'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+}
+
+replace Variable = "" in `row'
+local row = `row' + 1
+
+*=== PARENTAL BACKGROUND ===
+replace Variable = "=== POVERTY BY PARENTAL BACKGROUND ===" in `row'
+local row = `row' + 1
+
+local parent_label_1 "High skilled parents"
+local parent_label_2 "Medium skilled parents"
+local parent_label_3 "Low skilled parents"
+
+forvalues ps = 1/3 {
+    replace Variable = "" in `row'
+    local row = `row' + 1
+    
+    replace Variable = "=== `parent_label_`ps'' ===" in `row'
+    local row = `row' + 1
+    
+    replace Variable = "Share of population (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_post = `share_pop_parent`ps'_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "AROP rate (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `arop_rate_pre_parent`ps'_`yr'' in `row'
+        replace Value_`yr'_post = `arop_rate_post_parent`ps'_`yr'' in `row'
+        replace Value_`yr'_Ch = `arop_rate_post_parent`ps'_`yr'' - `arop_rate_pre_parent`ps'_`yr'' in `row'
+        if `arop_rate_pre_parent`ps'_`yr'' != . & `arop_rate_pre_parent`ps'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`arop_rate_post_parent`ps'_`yr'' - `arop_rate_pre_parent`ps'_`yr'') / `arop_rate_pre_parent`ps'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Share of AROP (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `share_arop_pre_parent`ps'_`yr'' in `row'
+        replace Value_`yr'_post = `share_arop_post_parent`ps'_`yr'' in `row'
+        replace Value_`yr'_Ch = `share_arop_post_parent`ps'_`yr'' - `share_arop_pre_parent`ps'_`yr'' in `row'
+        if `share_arop_pre_parent`ps'_`yr'' != . & `share_arop_pre_parent`ps'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`share_arop_post_parent`ps'_`yr'' - `share_arop_pre_parent`ps'_`yr'') / `share_arop_pre_parent`ps'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "IWP rate (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `iwp_rate_pre_parent`ps'_`yr'' in `row'
+        replace Value_`yr'_post = `iwp_rate_post_parent`ps'_`yr'' in `row'
+        replace Value_`yr'_Ch = `iwp_rate_post_parent`ps'_`yr'' - `iwp_rate_pre_parent`ps'_`yr'' in `row'
+        if `iwp_rate_pre_parent`ps'_`yr'' != . & `iwp_rate_pre_parent`ps'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`iwp_rate_post_parent`ps'_`yr'' - `iwp_rate_pre_parent`ps'_`yr'') / `iwp_rate_pre_parent`ps'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Share of IWP (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `share_iwp_pre_parent`ps'_`yr'' in `row'
+        replace Value_`yr'_post = `share_iwp_post_parent`ps'_`yr'' in `row'
+        replace Value_`yr'_Ch = `share_iwp_post_parent`ps'_`yr'' - `share_iwp_pre_parent`ps'_`yr'' in `row'
+        if `share_iwp_pre_parent`ps'_`yr'' != . & `share_iwp_pre_parent`ps'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`share_iwp_post_parent`ps'_`yr'' - `share_iwp_pre_parent`ps'_`yr'') / `share_iwp_pre_parent`ps'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+}
+
+keep if Variable != ""
+
+foreach yr of local years {
+    format Value_`yr'_pre %15.2f
+    format Value_`yr'_post %15.2f
+    format Value_`yr'_Ch %15.2f
+    format Value_`yr'_ChPct %15.2f
+}
+
+export excel "$output/Poverty_Education_PrePost.xlsx", replace sheet("Education") firstrow(variables)
+
+restore
+
+di as result _n "=== EDUCATION ANALYSIS COMPLETE ===" _n
