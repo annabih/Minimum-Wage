@@ -97,24 +97,24 @@ gen inwork_poor_post = (worker == 1 & arop_post == 1)
 gen inwork_poor_pre = (worker == 1 & arop_pre == 1)
 
 *===============================================================================
-* LABOR MARKET CLASSIFICATIONS
+* LABOR MARKET CLASSIFICATIONS - KORRIGIERT
 *===============================================================================
 di _n "=== Creating labor market classifications ===" _n
 
-* OCCUPATION (ISCO 1-digit)
-capture confirm variable PL051
+* OCCUPATION (PL051A - already aggregated ISCO-08)
+capture confirm variable PL051A
 if _rc == 0 {
     gen occ_cat = .
-    replace occ_cat = 1 if PL051 >= 1000 & PL051 < 2000  // Managers
-    replace occ_cat = 2 if PL051 >= 2000 & PL051 < 3000  // Professionals
-    replace occ_cat = 3 if PL051 >= 3000 & PL051 < 4000  // Technicians
-    replace occ_cat = 4 if PL051 >= 4000 & PL051 < 5000  // Clerical support
-    replace occ_cat = 5 if PL051 >= 5000 & PL051 < 6000  // Service/sales
-    replace occ_cat = 6 if PL051 >= 6000 & PL051 < 7000  // Skilled agriculture
-    replace occ_cat = 7 if PL051 >= 7000 & PL051 < 8000  // Craft workers
-    replace occ_cat = 8 if PL051 >= 8000 & PL051 < 9000  // Plant operators
-    replace occ_cat = 9 if PL051 >= 9000 & PL051 < 10000 // Elementary
-    replace occ_cat = 10 if PL051 >= 100 & PL051 < 1000  // Armed forces
+    replace occ_cat = 1 if PL051A == 1 | (PL051A >= 11 & PL051A <= 14)  */ Managers
+    replace occ_cat = 2 if PL051A == 2 | (PL051A >= 21 & PL051A <= 26)  */ Professionals
+    replace occ_cat = 3 if PL051A == 3 | (PL051A >= 31 & PL051A <= 35)  */ Technicians
+    replace occ_cat = 4 if PL051A == 4 | (PL051A >= 41 & PL051A <= 44)  */ Clerical
+    replace occ_cat = 5 if PL051A == 5 | (PL051A >= 51 & PL051A <= 54)  */ Service/Sales
+    replace occ_cat = 6 if PL051A == 6 | (PL051A >= 61 & PL051A <= 63)  */ Agriculture
+    replace occ_cat = 7 if PL051A == 7 | (PL051A >= 71 & PL051A <= 75)  */ Craft
+    replace occ_cat = 8 if PL051A == 8 | (PL051A >= 81 & PL051A <= 83)  */ Operators
+    replace occ_cat = 9 if PL051A == 9 | (PL051A >= 91 & PL051A <= 96)  */ Elementary
+    replace occ_cat = 10 if PL051A == 0                                 */ Armed Forces
     
     label define occ_lbl 1 "Managers" 2 "Professionals" 3 "Technicians" 4 "Clerical" 5 "Service/Sales" 6 "Agriculture" 7 "Craft" 8 "Operators" 9 "Elementary" 10 "Armed Forces"
     label values occ_cat occ_lbl
@@ -123,29 +123,25 @@ else {
     gen occ_cat = .
 }
 
-* INDUSTRY (NACE 1-letter)
+* INDUSTRY (PL111A - already aggregated NACE)
 capture confirm variable PL111A
 if _rc == 0 {
-    gen str1 nace_letter = substr(string(PL111A), 1, 1)
-    destring nace_letter, replace force
-    
     gen ind_cat = .
-    replace ind_cat = 1 if inlist(nace_letter, 1, 2, 3)  // A-C: Primary/Manufacturing
-    replace ind_cat = 2 if nace_letter == 4              // D-E: Utilities
-    replace ind_cat = 3 if nace_letter == 5              // F: Construction
-    replace ind_cat = 4 if inlist(nace_letter, 6, 7)    // G-H: Trade/Transport
-    replace ind_cat = 5 if nace_letter == 8              // I: Accommodation
-    replace ind_cat = 6 if nace_letter == 9              // J: Information
-    replace ind_cat = 7 if nace_letter == 10             // K: Finance
-    replace ind_cat = 8 if nace_letter == 11             // L: Real estate
-    replace ind_cat = 9 if nace_letter == 12             // M: Professional
-    replace ind_cat = 10 if nace_letter == 13            // N: Administrative
-    replace ind_cat = 11 if nace_letter == 14            // O: Public admin
-    replace ind_cat = 12 if nace_letter == 15            // P: Education
-    replace ind_cat = 13 if nace_letter == 16            // Q: Health
-    replace ind_cat = 14 if inlist(nace_letter, 17, 18, 19, 20) // R-U: Other services
+    replace ind_cat = 1 if PL111A == 1   */ A: Agriculture, forestry, fishing
+    replace ind_cat = 2 if PL111A == 2   */ B-E: Mining, Manufacturing, Utilities
+    replace ind_cat = 3 if PL111A == 3   */ F: Construction
+    replace ind_cat = 4 if PL111A == 4   */ G: Wholesale retail
+    replace ind_cat = 5 if PL111A == 5   */ H: Transportation and storage
+    replace ind_cat = 6 if PL111A == 6   */ I: Accommodation and food service
+    replace ind_cat = 7 if PL111A == 7   */ J: Information and communication
+    replace ind_cat = 8 if PL111A == 8   */ K: Financial and insurance
+    replace ind_cat = 9 if PL111A == 9   */ L-N: Real estate, Professional, Administrative
+    replace ind_cat = 10 if PL111A == 10 */ O: Public admin and defence
+    replace ind_cat = 11 if PL111A == 11 */ P: Education
+    replace ind_cat = 12 if PL111A == 12 */ Q: Health and social work
+    replace ind_cat = 13 if PL111A == 13 */ R-U: Other services
     
-    label define ind_lbl 1 "Primary/Manufacturing" 2 "Utilities" 3 "Construction" 4 "Trade/Transport" 5 "Accommodation" 6 "Information" 7 "Finance" 8 "Real Estate" 9 "Professional" 10 "Administrative" 11 "Public Admin" 12 "Education" 13 "Health" 14 "Other Services"
+    label define ind_lbl 1 "Agriculture/Forestry/Fishing" 2 "Mining/Manufacturing/Utilities" 3 "Construction" 4 "Wholesale/Retail" 5 "Transportation" 6 "Accommodation/Food" 7 "Information/Communication" 8 "Finance/Insurance" 9 "Real Estate/Professional" 10 "Public Admin" 11 "Education" 12 "Health/Social Work" 13 "Other Services"
     label values ind_cat ind_lbl
 }
 else {
@@ -153,10 +149,10 @@ else {
 }
 
 * CONTRACT TYPE
-capture confirm variable PL140
+capture confirm variable PL141
 if _rc == 0 {
     gen contract_cat = .
-    replace contract_cat = 1 if PL140 == 1  // Permanent
+    replace contract_cat = 1 if PL140 == 1  */ Permanent
     replace contract_cat = 2 if PL140 == 2  // Temporary
     
     label define contract_lbl 1 "Permanent" 2 "Temporary"
