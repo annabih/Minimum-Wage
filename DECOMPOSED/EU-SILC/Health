@@ -1,0 +1,847 @@
+*******************************************************************************************************************************************************************************************
+*** Titel: Health and Poverty Analysis - PRE/POST TRANSFER - EU-SILC Austria 2017-2024
+*** Date: 30.01.2026
+*** Variables: General health, Chronic illness, Activity limitation, Work intensity
+*******************************************************************************************************************************************************************************************
+clear all
+set more off
+
+use "D:\Data\AT_CROSS\SILC_CrossSec_AllYears_2015_2024.dta"
+global output "D:\InWorkPoverty_SILC"
+
+local years "2017 2018 2019 2020 2021 2022 2023 2024"
+
+di _n "=== HEALTH ANALYSIS START ===" _n
+
+*===============================================================================
+* DESTRING VARIABLES
+*===============================================================================
+local numeric_vars "HX090 HY023 HX050 RB050 PB040 RX010 PX010 PL073 PL074 PL075 PL076 year PH010 PH020 PH030 PL060"
+
+foreach var of local numeric_vars {
+    capture confirm variable `var'
+    if _rc == 0 {
+        capture confirm string variable `var'
+        if _rc == 0 {
+            replace `var' = subinstr(`var', ",", ".", .)
+            destring `var', replace force
+        }
+    }
+}
+
+*===============================================================================
+* BASIC VARIABLES
+*===============================================================================
+capture confirm variable RB050
+if _rc == 0 {
+    gen dwt = RB050
+}
+else {
+    gen dwt = PB040
+}
+
+capture confirm variable RX010
+if _rc == 0 {
+    gen age = RX010
+}
+else {
+    gen age = PX010
+}
+
+gen months_worked = 0
+foreach var in PL073 PL074 PL075 PL076 {
+    capture confirm variable `var'
+    if _rc == 0 {
+        replace months_worked = months_worked + `var' if !missing(`var')
+    }
+}
+replace months_worked = 12 if months_worked > 12 & !missing(months_worked)
+
+* POST-TRANSFER
+gen eq_hh_ils_post = HX090
+label variable eq_hh_ils_post "Equivalised income POST-transfer"
+
+* PRE-TRANSFER
+gen eq_hh_ils_pre = HY023 / HX050 if !missing(HY023) & !missing(HX050) & HX050 > 0
+label variable eq_hh_ils_pre "Equivalised income PRE-transfer"
+
+drop if missing(eq_hh_ils_post) | missing(dwt) | missing(age)
+
+*===============================================================================
+* POVERTY THRESHOLD
+*===============================================================================
+tempfile thresholds
+tempname h
+postfile `h' int year double median_eq_hh_ils pov_threshold_60 using `thresholds', replace
+
+foreach yr of local years {
+    quietly count if year==`yr'
+    if r(N)==0 continue
+    quietly _pctile eq_hh_ils_post [pw=dwt] if year==`yr', p(50)
+    local median_val = r(r1)
+    post `h' (`yr') (`median_val') (0.60*`median_val')
+}
+postclose `h'
+
+merge m:1 year using `thresholds', nogen
+replace pov_threshold_60 = round(pov_threshold_60, 1)
+
+*===============================================================================
+* POVERTY STATUS
+*===============================================================================
+gen byte arop_post = (eq_hh_ils_post < pov_threshold_60) if !missing(pov_threshold_60)
+gen byte arop_pre = (eq_hh_ils_pre < pov_threshold_60) if !missing(pov_threshold_60) & !missing(eq_hh_ils_pre)
+
+gen worker = (months_worked > 6 & age >= 18 & age <= 64)
+gen inwork_poor_post = (worker == 1 & arop_post == 1)
+gen inwork_poor_pre = (worker == 1 & arop_pre == 1)
+
+*===============================================================================
+* HEALTH CLASSIFICATIONS
+*===============================================================================
+di _n "=== Creating health classifications ===" _n
+
+* GENERAL HEALTH STATUS
+capture confirm variable PH010
+if _rc == 0 {
+    gen health_cat = .
+    replace health_cat = 1 if PH010 == 1  // Very good
+    replace health_cat = 2 if PH010 == 2  // Good
+    replace health_cat = 3 if PH010 == 3  // Fair
+    replace health_cat = 4 if PH010 == 4  // Bad
+    replace health_cat = 5 if PH010 == 5  // Very bad
+    
+    label define health_lbl 1 "Very good" 2 "Good" 3 "Fair" 4 "Bad" 5 "Very bad"
+    label values health_cat health_lbl
+    
+    * Simplified: Good/Fair/Poor
+    gen health_simple = .
+    replace health_simple = 1 if inlist(health_cat, 1, 2)  // Good health
+    replace health_simple = 2 if health_cat == 3           // Fair health
+    replace health_simple = 3 if inlist(health_cat, 4, 5)  // Poor health
+    
+    label define health_simple_lbl 1 "Good health" 2 "Fair health" 3 "Poor health"
+    label values health_simple health_simple_lbl
+}
+else {
+    gen health_cat = .
+    gen health_simple = .
+}
+
+* CHRONIC ILLNESS OR CONDITION
+capture confirm variable PH020
+if _rc == 0 {
+    gen chronic_cat = .
+    replace chronic_cat = 1 if PH020 == 1  // Yes
+    replace chronic_cat = 2 if PH020 == 2  // No
+    
+    label define chronic_lbl 1 "Chronic illness" 2 "No chronic illness"
+    label values chronic_cat chronic_lbl
+}
+else {
+    gen chronic_cat = .
+}
+
+* ACTIVITY LIMITATION
+capture confirm variable PH030
+if _rc == 0 {
+    gen limitation_cat = .
+    replace limitation_cat = 1 if PH030 == 1  // Severely limited
+    replace limitation_cat = 2 if PH030 == 2  // Limited
+    replace limitation_cat = 3 if PH030 == 3  // Not limited
+    
+    label define limitation_lbl 1 "Severely limited" 2 "Limited" 3 "Not limited"
+    label values limitation_cat limitation_lbl
+    
+    * Binary: Limited vs Not limited
+    gen limited_binary = .
+    replace limited_binary = 1 if inlist(limitation_cat, 1, 2)  // Any limitation
+    replace limited_binary = 2 if limitation_cat == 3           // No limitation
+    
+    label define limited_binary_lbl 1 "Activity limited" 2 "Not limited"
+    label values limited_binary limited_binary_lbl
+}
+else {
+    gen limitation_cat = .
+    gen limited_binary = .
+}
+
+* WORK INTENSITY (hours per week)
+capture confirm variable PL060
+if _rc == 0 {
+    gen work_intensity = .
+    replace work_intensity = 1 if PL060 > 0 & PL060 < 20 & !missing(PL060)   // Part-time low
+    replace work_intensity = 2 if PL060 >= 20 & PL060 < 35 & !missing(PL060) // Part-time high
+    replace work_intensity = 3 if PL060 >= 35 & PL060 < 45 & !missing(PL060) // Full-time normal
+    replace work_intensity = 4 if PL060 >= 45 & !missing(PL060)              // Full-time high/overtime
+    
+    label define work_intensity_lbl 1 "<20h/week" 2 "20-34h/week" 3 "35-44h/week" 4 "45+h/week"
+    label values work_intensity work_intensity_lbl
+}
+else {
+    gen work_intensity = .
+}
+
+*===============================================================================
+* REFERENCE TOTALS
+*===============================================================================
+foreach yr of local years {
+    quietly count if year == `yr'
+    if r(N) == 0 continue
+    
+    sum dwt if year == `yr'
+    local ref_pop_`yr' = r(sum)
+    
+    gen temp_arop_post = arop_post * dwt if year == `yr'
+    sum temp_arop_post
+    local ref_arop_post_`yr' = r(sum)
+    drop temp_arop_post
+    
+    gen temp_arop_pre = arop_pre * dwt if year == `yr'
+    sum temp_arop_pre
+    local ref_arop_pre_`yr' = r(sum)
+    drop temp_arop_pre
+    
+    sum dwt if year == `yr' & worker == 1
+    local ref_workers_`yr' = r(sum)
+    
+    gen temp_iwp_post = inwork_poor_post * dwt if year == `yr' & worker == 1
+    sum temp_iwp_post
+    local ref_iwp_post_`yr' = r(sum)
+    drop temp_iwp_post
+    
+    gen temp_iwp_pre = inwork_poor_pre * dwt if year == `yr' & worker == 1
+    sum temp_iwp_pre
+    local ref_iwp_pre_`yr' = r(sum)
+    drop temp_iwp_pre
+}
+
+*===============================================================================
+* CALCULATE STATISTICS - GENERAL HEALTH
+*===============================================================================
+di _n "=== Calculating statistics by health status ===" _n
+
+foreach yr of local years {
+    forvalues hc = 1/3 {
+        quietly count if year == `yr' & health_simple == `hc'
+        if r(N) == 0 {
+            local arop_rate_post_health`hc'_`yr' = .
+            local arop_rate_pre_health`hc'_`yr' = .
+            local iwp_rate_post_health`hc'_`yr' = .
+            local iwp_rate_pre_health`hc'_`yr' = .
+            local n_pop_health`hc'_`yr' = .
+            local n_arop_post_health`hc'_`yr' = .
+            local n_arop_pre_health`hc'_`yr' = .
+            local n_workers_health`hc'_`yr' = .
+            local n_iwp_post_health`hc'_`yr' = .
+            local n_iwp_pre_health`hc'_`yr' = .
+            local share_pop_health`hc'_`yr' = .
+            local share_arop_post_health`hc'_`yr' = .
+            local share_arop_pre_health`hc'_`yr' = .
+            local share_workers_health`hc'_`yr' = .
+            local share_iwp_post_health`hc'_`yr' = .
+            local share_iwp_pre_health`hc'_`yr' = .
+            continue
+        }
+        
+        * Population
+        sum dwt if year == `yr' & health_simple == `hc'
+        local n_pop_health`hc'_`yr' = r(sum)
+        local share_pop_health`hc'_`yr' = (`n_pop_health`hc'_`yr'' / `ref_pop_`yr'') * 100
+        
+        * AROP POST
+        sum arop_post [aw=dwt] if year == `yr' & health_simple == `hc'
+        local arop_rate_post_health`hc'_`yr' = r(mean) * 100
+        
+        gen temp = arop_post * dwt if year == `yr' & health_simple == `hc'
+        sum temp
+        local n_arop_post_health`hc'_`yr' = r(sum)
+        drop temp
+        
+        if `ref_arop_post_`yr'' > 0 {
+            local share_arop_post_health`hc'_`yr' = (`n_arop_post_health`hc'_`yr'' / `ref_arop_post_`yr'') * 100
+        }
+        
+        * AROP PRE
+        sum arop_pre [aw=dwt] if year == `yr' & health_simple == `hc'
+        local arop_rate_pre_health`hc'_`yr' = r(mean) * 100
+        
+        gen temp = arop_pre * dwt if year == `yr' & health_simple == `hc'
+        sum temp
+        local n_arop_pre_health`hc'_`yr' = r(sum)
+        drop temp
+        
+        if `ref_arop_pre_`yr'' > 0 {
+            local share_arop_pre_health`hc'_`yr' = (`n_arop_pre_health`hc'_`yr'' / `ref_arop_pre_`yr'') * 100
+        }
+        
+        * IWP
+        quietly count if year == `yr' & health_simple == `hc' & worker == 1
+        if r(N) > 0 {
+            sum dwt if year == `yr' & health_simple == `hc' & worker == 1
+            local n_workers_health`hc'_`yr' = r(sum)
+            local share_workers_health`hc'_`yr' = (`n_workers_health`hc'_`yr'' / `ref_workers_`yr'') * 100
+            
+            * IWP POST
+            sum inwork_poor_post [aw=dwt] if year == `yr' & health_simple == `hc' & worker == 1
+            local iwp_rate_post_health`hc'_`yr' = r(mean) * 100
+            
+            gen temp = inwork_poor_post * dwt if year == `yr' & health_simple == `hc' & worker == 1
+            sum temp
+            local n_iwp_post_health`hc'_`yr' = r(sum)
+            drop temp
+            
+            if `ref_iwp_post_`yr'' > 0 {
+                local share_iwp_post_health`hc'_`yr' = (`n_iwp_post_health`hc'_`yr'' / `ref_iwp_post_`yr'') * 100
+            }
+            
+            * IWP PRE
+            sum inwork_poor_pre [aw=dwt] if year == `yr' & health_simple == `hc' & worker == 1
+            local iwp_rate_pre_health`hc'_`yr' = r(mean) * 100
+            
+            gen temp = inwork_poor_pre * dwt if year == `yr' & health_simple == `hc' & worker == 1
+            sum temp
+            local n_iwp_pre_health`hc'_`yr' = r(sum)
+            drop temp
+            
+            if `ref_iwp_pre_`yr'' > 0 {
+                local share_iwp_pre_health`hc'_`yr' = (`n_iwp_pre_health`hc'_`yr'' / `ref_iwp_pre_`yr'') * 100
+            }
+        }
+    }
+}
+
+*===============================================================================
+* CALCULATE STATISTICS - CHRONIC ILLNESS
+*===============================================================================
+foreach yr of local years {
+    forvalues cc = 1/2 {
+        quietly count if year == `yr' & chronic_cat == `cc'
+        if r(N) == 0 {
+            local arop_rate_post_chronic`cc'_`yr' = .
+            local arop_rate_pre_chronic`cc'_`yr' = .
+            local iwp_rate_post_chronic`cc'_`yr' = .
+            local iwp_rate_pre_chronic`cc'_`yr' = .
+            local n_pop_chronic`cc'_`yr' = .
+            local share_pop_chronic`cc'_`yr' = .
+            local n_arop_post_chronic`cc'_`yr' = .
+            local n_arop_pre_chronic`cc'_`yr' = .
+            local share_arop_post_chronic`cc'_`yr' = .
+            local share_arop_pre_chronic`cc'_`yr' = .
+            local n_workers_chronic`cc'_`yr' = .
+            local share_workers_chronic`cc'_`yr' = .
+            local n_iwp_post_chronic`cc'_`yr' = .
+            local n_iwp_pre_chronic`cc'_`yr' = .
+            local share_iwp_post_chronic`cc'_`yr' = .
+            local share_iwp_pre_chronic`cc'_`yr' = .
+            continue
+        }
+        
+        * Population
+        sum dwt if year == `yr' & chronic_cat == `cc'
+        local n_pop_chronic`cc'_`yr' = r(sum)
+        local share_pop_chronic`cc'_`yr' = (`n_pop_chronic`cc'_`yr'' / `ref_pop_`yr'') * 100
+        
+        * AROP POST
+        sum arop_post [aw=dwt] if year == `yr' & chronic_cat == `cc'
+        local arop_rate_post_chronic`cc'_`yr' = r(mean) * 100
+        
+        gen temp = arop_post * dwt if year == `yr' & chronic_cat == `cc'
+        sum temp
+        local n_arop_post_chronic`cc'_`yr' = r(sum)
+        drop temp
+        
+        if `ref_arop_post_`yr'' > 0 {
+            local share_arop_post_chronic`cc'_`yr' = (`n_arop_post_chronic`cc'_`yr'' / `ref_arop_post_`yr'') * 100
+        }
+        
+        * AROP PRE
+        sum arop_pre [aw=dwt] if year == `yr' & chronic_cat == `cc'
+        local arop_rate_pre_chronic`cc'_`yr' = r(mean) * 100
+        
+        gen temp = arop_pre * dwt if year == `yr' & chronic_cat == `cc'
+        sum temp
+        local n_arop_pre_chronic`cc'_`yr' = r(sum)
+        drop temp
+        
+        if `ref_arop_pre_`yr'' > 0 {
+            local share_arop_pre_chronic`cc'_`yr' = (`n_arop_pre_chronic`cc'_`yr'' / `ref_arop_pre_`yr'') * 100
+        }
+        
+        * IWP
+        quietly count if year == `yr' & chronic_cat == `cc' & worker == 1
+        if r(N) > 0 {
+            sum dwt if year == `yr' & chronic_cat == `cc' & worker == 1
+            local n_workers_chronic`cc'_`yr' = r(sum)
+            local share_workers_chronic`cc'_`yr' = (`n_workers_chronic`cc'_`yr'' / `ref_workers_`yr'') * 100
+            
+            * IWP POST
+            sum inwork_poor_post [aw=dwt] if year == `yr' & chronic_cat == `cc' & worker == 1
+            local iwp_rate_post_chronic`cc'_`yr' = r(mean) * 100
+            
+            gen temp = inwork_poor_post * dwt if year == `yr' & chronic_cat == `cc' & worker == 1
+            sum temp
+            local n_iwp_post_chronic`cc'_`yr' = r(sum)
+            drop temp
+            
+            if `ref_iwp_post_`yr'' > 0 {
+                local share_iwp_post_chronic`cc'_`yr' = (`n_iwp_post_chronic`cc'_`yr'' / `ref_iwp_post_`yr'') * 100
+            }
+            
+            * IWP PRE
+            sum inwork_poor_pre [aw=dwt] if year == `yr' & chronic_cat == `cc' & worker == 1
+            local iwp_rate_pre_chronic`cc'_`yr' = r(mean) * 100
+            
+            gen temp = inwork_poor_pre * dwt if year == `yr' & chronic_cat == `cc' & worker == 1
+            sum temp
+            local n_iwp_pre_chronic`cc'_`yr' = r(sum)
+            drop temp
+            
+            if `ref_iwp_pre_`yr'' > 0 {
+                local share_iwp_pre_chronic`cc'_`yr' = (`n_iwp_pre_chronic`cc'_`yr'' / `ref_iwp_pre_`yr'') * 100
+            }
+        }
+    }
+}
+
+*===============================================================================
+* CALCULATE STATISTICS - ACTIVITY LIMITATION
+*===============================================================================
+foreach yr of local years {
+    forvalues lc = 1/2 {
+        quietly count if year == `yr' & limited_binary == `lc'
+        if r(N) == 0 {
+            local arop_rate_post_limit`lc'_`yr' = .
+            local arop_rate_pre_limit`lc'_`yr' = .
+            local iwp_rate_post_limit`lc'_`yr' = .
+            local iwp_rate_pre_limit`lc'_`yr' = .
+            local n_pop_limit`lc'_`yr' = .
+            local share_pop_limit`lc'_`yr' = .
+            local n_arop_post_limit`lc'_`yr' = .
+            local n_arop_pre_limit`lc'_`yr' = .
+            local share_arop_post_limit`lc'_`yr' = .
+            local share_arop_pre_limit`lc'_`yr' = .
+            local n_workers_limit`lc'_`yr' = .
+            local share_workers_limit`lc'_`yr' = .
+            local n_iwp_post_limit`lc'_`yr' = .
+            local n_iwp_pre_limit`lc'_`yr' = .
+            local share_iwp_post_limit`lc'_`yr' = .
+            local share_iwp_pre_limit`lc'_`yr' = .
+            continue
+        }
+        
+        * Population
+        sum dwt if year == `yr' & limited_binary == `lc'
+        local n_pop_limit`lc'_`yr' = r(sum)
+        local share_pop_limit`lc'_`yr' = (`n_pop_limit`lc'_`yr'' / `ref_pop_`yr'') * 100
+        
+        * AROP POST
+        sum arop_post [aw=dwt] if year == `yr' & limited_binary == `lc'
+        local arop_rate_post_limit`lc'_`yr' = r(mean) * 100
+        
+        gen temp = arop_post * dwt if year == `yr' & limited_binary == `lc'
+        sum temp
+        local n_arop_post_limit`lc'_`yr' = r(sum)
+        drop temp
+        
+        if `ref_arop_post_`yr'' > 0 {
+            local share_arop_post_limit`lc'_`yr' = (`n_arop_post_limit`lc'_`yr'' / `ref_arop_post_`yr'') * 100
+        }
+        
+        * AROP PRE
+        sum arop_pre [aw=dwt] if year == `yr' & limited_binary == `lc'
+        local arop_rate_pre_limit`lc'_`yr' = r(mean) * 100
+        
+        gen temp = arop_pre * dwt if year == `yr' & limited_binary == `lc'
+        sum temp
+        local n_arop_pre_limit`lc'_`yr' = r(sum)
+        drop temp
+        
+        if `ref_arop_pre_`yr'' > 0 {
+            local share_arop_pre_limit`lc'_`yr' = (`n_arop_pre_limit`lc'_`yr'' / `ref_arop_pre_`yr'') * 100
+        }
+        
+        * IWP
+        quietly count if year == `yr' & limited_binary == `lc' & worker == 1
+        if r(N) > 0 {
+            sum dwt if year == `yr' & limited_binary == `lc' & worker == 1
+            local n_workers_limit`lc'_`yr' = r(sum)
+            local share_workers_limit`lc'_`yr' = (`n_workers_limit`lc'_`yr'' / `ref_workers_`yr'') * 100
+            
+            * IWP POST
+            sum inwork_poor_post [aw=dwt] if year == `yr' & limited_binary == `lc' & worker == 1
+            local iwp_rate_post_limit`lc'_`yr' = r(mean) * 100
+            
+            gen temp = inwork_poor_post * dwt if year == `yr' & limited_binary == `lc' & worker == 1
+            sum temp
+            local n_iwp_post_limit`lc'_`yr' = r(sum)
+            drop temp
+            
+            if `ref_iwp_post_`yr'' > 0 {
+                local share_iwp_post_limit`lc'_`yr' = (`n_iwp_post_limit`lc'_`yr'' / `ref_iwp_post_`yr'') * 100
+            }
+            
+            * IWP PRE
+            sum inwork_poor_pre [aw=dwt] if year == `yr' & limited_binary == `lc' & worker == 1
+            local iwp_rate_pre_limit`lc'_`yr' = r(mean) * 100
+            
+            gen temp = inwork_poor_pre * dwt if year == `yr' & limited_binary == `lc' & worker == 1
+            sum temp
+            local n_iwp_pre_limit`lc'_`yr' = r(sum)
+            drop temp
+            
+            if `ref_iwp_pre_`yr'' > 0 {
+                local share_iwp_pre_limit`lc'_`yr' = (`n_iwp_pre_limit`lc'_`yr'' / `ref_iwp_pre_`yr'') * 100
+            }
+        }
+    }
+}
+
+*===============================================================================
+* CALCULATE STATISTICS - WORK INTENSITY
+*===============================================================================
+foreach yr of local years {
+    forvalues wi = 1/4 {
+        quietly count if year == `yr' & work_intensity == `wi' & worker == 1
+        if r(N) == 0 {
+            local iwp_rate_post_workint`wi'_`yr' = .
+            local iwp_rate_pre_workint`wi'_`yr' = .
+            local n_workers_workint`wi'_`yr' = .
+            local n_iwp_post_workint`wi'_`yr' = .
+            local n_iwp_pre_workint`wi'_`yr' = .
+            local share_workers_workint`wi'_`yr' = .
+            local share_iwp_post_workint`wi'_`yr' = .
+            local share_iwp_pre_workint`wi'_`yr' = .
+            continue
+        }
+        
+        sum dwt if year == `yr' & work_intensity == `wi' & worker == 1
+        local n_workers_workint`wi'_`yr' = r(sum)
+        local share_workers_workint`wi'_`yr' = (`n_workers_workint`wi'_`yr'' / `ref_workers_`yr'') * 100
+        
+        * IWP POST
+        sum inwork_poor_post [aw=dwt] if year == `yr' & work_intensity == `wi' & worker == 1
+        local iwp_rate_post_workint`wi'_`yr' = r(mean) * 100
+        
+        gen temp = inwork_poor_post * dwt if year == `yr' & work_intensity == `wi' & worker == 1
+        sum temp
+        local n_iwp_post_workint`wi'_`yr' = r(sum)
+        drop temp
+        
+        if `ref_iwp_post_`yr'' > 0 {
+            local share_iwp_post_workint`wi'_`yr' = (`n_iwp_post_workint`wi'_`yr'' / `ref_iwp_post_`yr'') * 100
+        }
+        
+        * IWP PRE
+        sum inwork_poor_pre [aw=dwt] if year == `yr' & work_intensity == `wi' & worker == 1
+        local iwp_rate_pre_workint`wi'_`yr' = r(mean) * 100
+        
+        gen temp = inwork_poor_pre * dwt if year == `yr' & work_intensity == `wi' & worker == 1
+        sum temp
+        local n_iwp_pre_workint`wi'_`yr' = r(sum)
+        drop temp
+        
+        if `ref_iwp_pre_`yr'' > 0 {
+            local share_iwp_pre_workint`wi'_`yr' = (`n_iwp_pre_workint`wi'_`yr'' / `ref_iwp_pre_`yr'') * 100
+        }
+    }
+}
+
+*===============================================================================
+* CREATE EXCEL OUTPUT
+*===============================================================================
+preserve
+clear
+set obs 300
+
+gen str100 Variable = ""
+foreach yr of local years {
+    gen double Value_`yr'_pre = .
+    gen double Value_`yr'_post = .
+    gen double Value_`yr'_Ch = .
+    gen double Value_`yr'_ChPct = .
+}
+
+local row = 1
+
+*=== GENERAL HEALTH ===
+replace Variable = "=== POVERTY BY HEALTH STATUS ===" in `row'
+local row = `row' + 1
+
+local health_label_1 "Good health"
+local health_label_2 "Fair health"
+local health_label_3 "Poor health"
+
+forvalues hc = 1/3 {
+    replace Variable = "" in `row'
+    local row = `row' + 1
+    
+    replace Variable = "=== `health_label_`hc'' ===" in `row'
+    local row = `row' + 1
+    
+    replace Variable = "Share of population (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_post = `share_pop_health`hc'_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "AROP rate (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `arop_rate_pre_health`hc'_`yr'' in `row'
+        replace Value_`yr'_post = `arop_rate_post_health`hc'_`yr'' in `row'
+        replace Value_`yr'_Ch = `arop_rate_post_health`hc'_`yr'' - `arop_rate_pre_health`hc'_`yr'' in `row'
+        if `arop_rate_pre_health`hc'_`yr'' != . & `arop_rate_pre_health`hc'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`arop_rate_post_health`hc'_`yr'' - `arop_rate_pre_health`hc'_`yr'') / `arop_rate_pre_health`hc'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Share of AROP (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `share_arop_pre_health`hc'_`yr'' in `row'
+        replace Value_`yr'_post = `share_arop_post_health`hc'_`yr'' in `row'
+        replace Value_`yr'_Ch = `share_arop_post_health`hc'_`yr'' - `share_arop_pre_health`hc'_`yr'' in `row'
+        if `share_arop_pre_health`hc'_`yr'' != . & `share_arop_pre_health`hc'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`share_arop_post_health`hc'_`yr'' - `share_arop_pre_health`hc'_`yr'') / `share_arop_pre_health`hc'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "IWP rate (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `iwp_rate_pre_health`hc'_`yr'' in `row'
+        replace Value_`yr'_post = `iwp_rate_post_health`hc'_`yr'' in `row'
+        replace Value_`yr'_Ch = `iwp_rate_post_health`hc'_`yr'' - `iwp_rate_pre_health`hc'_`yr'' in `row'
+        if `iwp_rate_pre_health`hc'_`yr'' != . & `iwp_rate_pre_health`hc'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`iwp_rate_post_health`hc'_`yr'' - `iwp_rate_pre_health`hc'_`yr'') / `iwp_rate_pre_health`hc'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Share of IWP (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `share_iwp_pre_health`hc'_`yr'' in `row'
+        replace Value_`yr'_post = `share_iwp_post_health`hc'_`yr'' in `row'
+        replace Value_`yr'_Ch = `share_iwp_post_health`hc'_`yr'' - `share_iwp_pre_health`hc'_`yr'' in `row'
+        if `share_iwp_pre_health`hc'_`yr'' != . & `share_iwp_pre_health`hc'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`share_iwp_post_health`hc'_`yr'' - `share_iwp_pre_health`hc'_`yr'') / `share_iwp_pre_health`hc'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+}
+
+replace Variable = "" in `row'
+local row = `row' + 1
+
+*=== CHRONIC ILLNESS ===
+replace Variable = "=== POVERTY BY CHRONIC ILLNESS ===" in `row'
+local row = `row' + 1
+
+local chronic_label_1 "Chronic illness"
+local chronic_label_2 "No chronic illness"
+
+forvalues cc = 1/2 {
+    replace Variable = "" in `row'
+    local row = `row' + 1
+    
+    replace Variable = "=== `chronic_label_`cc'' ===" in `row'
+    local row = `row' + 1
+    
+    replace Variable = "Share of population (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_post = `share_pop_chronic`cc'_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "AROP rate (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `arop_rate_pre_chronic`cc'_`yr'' in `row'
+        replace Value_`yr'_post = `arop_rate_post_chronic`cc'_`yr'' in `row'
+        replace Value_`yr'_Ch = `arop_rate_post_chronic`cc'_`yr'' - `arop_rate_pre_chronic`cc'_`yr'' in `row'
+        if `arop_rate_pre_chronic`cc'_`yr'' != . & `arop_rate_pre_chronic`cc'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`arop_rate_post_chronic`cc'_`yr'' - `arop_rate_pre_chronic`cc'_`yr'') / `arop_rate_pre_chronic`cc'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Share of AROP (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `share_arop_pre_chronic`cc'_`yr'' in `row'
+        replace Value_`yr'_post = `share_arop_post_chronic`cc'_`yr'' in `row'
+        replace Value_`yr'_Ch = `share_arop_post_chronic`cc'_`yr'' - `share_arop_pre_chronic`cc'_`yr'' in `row'
+        if `share_arop_pre_chronic`cc'_`yr'' != . & `share_arop_pre_chronic`cc'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`share_arop_post_chronic`cc'_`yr'' - `share_arop_pre_chronic`cc'_`yr'') / `share_arop_pre_chronic`cc'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "IWP rate (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `iwp_rate_pre_chronic`cc'_`yr'' in `row'
+        replace Value_`yr'_post = `iwp_rate_post_chronic`cc'_`yr'' in `row'
+        replace Value_`yr'_Ch = `iwp_rate_post_chronic`cc'_`yr'' - `iwp_rate_pre_chronic`cc'_`yr'' in `row'
+        if `iwp_rate_pre_chronic`cc'_`yr'' != . & `iwp_rate_pre_chronic`cc'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`iwp_rate_post_chronic`cc'_`yr'' - `iwp_rate_pre_chronic`cc'_`yr'') / `iwp_rate_pre_chronic`cc'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Share of IWP (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `share_iwp_pre_chronic`cc'_`yr'' in `row'
+        replace Value_`yr'_post = `share_iwp_post_chronic`cc'_`yr'' in `row'
+        replace Value_`yr'_Ch = `share_iwp_post_chronic`cc'_`yr'' - `share_iwp_pre_chronic`cc'_`yr'' in `row'
+        if `share_iwp_pre_chronic`cc'_`yr'' != . & `share_iwp_pre_chronic`cc'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`share_iwp_post_chronic`cc'_`yr'' - `share_iwp_pre_chronic`cc'_`yr'') / `share_iwp_pre_chronic`cc'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+}
+
+replace Variable = "" in `row'
+local row = `row' + 1
+
+*=== ACTIVITY LIMITATION ===
+replace Variable = "=== POVERTY BY ACTIVITY LIMITATION ===" in `row'
+local row = `row' + 1
+
+local limit_label_1 "Activity limited"
+local limit_label_2 "Not limited"
+
+forvalues lc = 1/2 {
+    replace Variable = "" in `row'
+    local row = `row' + 1
+    
+    replace Variable = "=== `limit_label_`lc'' ===" in `row'
+    local row = `row' + 1
+    
+    replace Variable = "Share of population (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_post = `share_pop_limit`lc'_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "AROP rate (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `arop_rate_pre_limit`lc'_`yr'' in `row'
+        replace Value_`yr'_post = `arop_rate_post_limit`lc'_`yr'' in `row'
+        replace Value_`yr'_Ch = `arop_rate_post_limit`lc'_`yr'' - `arop_rate_pre_limit`lc'_`yr'' in `row'
+        if `arop_rate_pre_limit`lc'_`yr'' != . & `arop_rate_pre_limit`lc'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`arop_rate_post_limit`lc'_`yr'' - `arop_rate_pre_limit`lc'_`yr'') / `arop_rate_pre_limit`lc'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Share of AROP (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `share_arop_pre_limit`lc'_`yr'' in `row'
+        replace Value_`yr'_post = `share_arop_post_limit`lc'_`yr'' in `row'
+        replace Value_`yr'_Ch = `share_arop_post_limit`lc'_`yr'' - `share_arop_pre_limit`lc'_`yr'' in `row'
+        if `share_arop_pre_limit`lc'_`yr'' != . & `share_arop_pre_limit`lc'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`share_arop_post_limit`lc'_`yr'' - `share_arop_pre_limit`lc'_`yr'') / `share_arop_pre_limit`lc'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "IWP rate (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `iwp_rate_pre_limit`lc'_`yr'' in `row'
+        replace Value_`yr'_post = `iwp_rate_post_limit`lc'_`yr'' in `row'
+        replace Value_`yr'_Ch = `iwp_rate_post_limit`lc'_`yr'' - `iwp_rate_pre_limit`lc'_`yr'' in `row'
+        if `iwp_rate_pre_limit`lc'_`yr'' != . & `iwp_rate_pre_limit`lc'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`iwp_rate_post_limit`lc'_`yr'' - `iwp_rate_pre_limit`lc'_`yr'') / `iwp_rate_pre_limit`lc'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Share of IWP (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `share_iwp_pre_limit`lc'_`yr'' in `row'
+        replace Value_`yr'_post = `share_iwp_post_limit`lc'_`yr'' in `row'
+        replace Value_`yr'_Ch = `share_iwp_post_limit`lc'_`yr'' - `share_iwp_pre_limit`lc'_`yr'' in `row'
+        if `share_iwp_pre_limit`lc'_`yr'' != . & `share_iwp_pre_limit`lc'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`share_iwp_post_limit`lc'_`yr'' - `share_iwp_pre_limit`lc'_`yr'') / `share_iwp_pre_limit`lc'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+}
+
+replace Variable = "" in `row'
+local row = `row' + 1
+
+*=== WORK INTENSITY ===
+replace Variable = "=== IN-WORK POVERTY BY WORK INTENSITY ===" in `row'
+local row = `row' + 1
+
+local workint_label_1 "<20h/week"
+local workint_label_2 "20-34h/week"
+local workint_label_3 "35-44h/week"
+local workint_label_4 "45+h/week"
+
+forvalues wi = 1/4 {
+    replace Variable = "" in `row'
+    local row = `row' + 1
+    
+    replace Variable = "=== `workint_label_`wi'' ===" in `row'
+    local row = `row' + 1
+    
+    replace Variable = "Share of workers (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_post = `share_workers_workint`wi'_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "IWP rate (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `iwp_rate_pre_workint`wi'_`yr'' in `row'
+        replace Value_`yr'_post = `iwp_rate_post_workint`wi'_`yr'' in `row'
+        replace Value_`yr'_Ch = `iwp_rate_post_workint`wi'_`yr'' - `iwp_rate_pre_workint`wi'_`yr'' in `row'
+        if `iwp_rate_pre_workint`wi'_`yr'' != . & `iwp_rate_pre_workint`wi'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`iwp_rate_post_workint`wi'_`yr'' - `iwp_rate_pre_workint`wi'_`yr'') / `iwp_rate_pre_workint`wi'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Share of IWP (%)" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `share_iwp_pre_workint`wi'_`yr'' in `row'
+        replace Value_`yr'_post = `share_iwp_post_workint`wi'_`yr'' in `row'
+        replace Value_`yr'_Ch = `share_iwp_post_workint`wi'_`yr'' - `share_iwp_pre_workint`wi'_`yr'' in `row'
+        if `share_iwp_pre_workint`wi'_`yr'' != . & `share_iwp_pre_workint`wi'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`share_iwp_post_workint`wi'_`yr'' - `share_iwp_pre_workint`wi'_`yr'') / `share_iwp_pre_workint`wi'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Number workers" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_post = `n_workers_workint`wi'_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Number IWP" in `row'
+    foreach yr of local years {
+        replace Value_`yr'_pre = `n_iwp_pre_workint`wi'_`yr'' in `row'
+        replace Value_`yr'_post = `n_iwp_post_workint`wi'_`yr'' in `row'
+        replace Value_`yr'_Ch = `n_iwp_post_workint`wi'_`yr'' - `n_iwp_pre_workint`wi'_`yr'' in `row'
+        if `n_iwp_pre_workint`wi'_`yr'' > 0 {
+            replace Value_`yr'_ChPct = ((`n_iwp_post_workint`wi'_`yr'' - `n_iwp_pre_workint`wi'_`yr'') / `n_iwp_pre_workint`wi'_`yr'') * 100 in `row'
+        }
+    }
+    local row = `row' + 1
+}
+
+keep if Variable != ""
+
+foreach yr of local years {
+    format Value_`yr'_pre %15.2f
+    format Value_`yr'_post %15.2f
+    format Value_`yr'_Ch %15.2f
+    format Value_`yr'_ChPct %15.2f
+}
+
+export excel "$output/Poverty_Health_PrePost.xlsx", replace sheet("Health") firstrow(variables)
+
+restore
+
+di as result _n "=== HEALTH ANALYSIS COMPLETE ===" _n
