@@ -1,8 +1,10 @@
 *******************************************************************************************************************************************************************************************
-*** Titel: Labor Market Poverty Analysis - PRE/POST TRANSFER - EU-SILC Austria 2017-2024
-*** Date: 30.01.2026
-*** Variables: Occupation (ISCO), Industry (NACE), Contract Type, Employment Status
+*** Title: Poverty Analysis by Employment Characteristics - Pre/Post Transfer - EU-SILC Austria 2017-2024
+*** Variables: Occupation (ISCO), Economic Activity (NACE), Contract Type, Work Intensity
+*** Note: Variable names change from 2020 onwards (PL051->PL051A, PL111->PL111A, PL140->PL141)
+*** Date: 03.02.2026
 *******************************************************************************************************************************************************************************************
+
 clear all
 set more off
 
@@ -11,12 +13,12 @@ global output "D:\InWorkPoverty_SILC"
 
 local years "2017 2018 2019 2020 2021 2022 2023 2024"
 
-di _n "=== LABOR MARKET ANALYSIS START ===" _n
+di _n "=== EMPLOYMENT CHARACTERISTICS POVERTY ANALYSIS START ===" _n
 
 *===============================================================================
 * DESTRING VARIABLES
 *===============================================================================
-local numeric_vars "HX090 HY023 HX050 RB050 PB040 RX010 PX010 PL073 PL074 PL075 PL076 year PL051A PL111A PL111 PL141 PL040A"
+local numeric_vars "HX090 HY023 HX050 RB050 PB040 RX010 PX010 PL073 PL074 PL075 PL076 year PB150 PL060 PL100 PL051 PL051A PL140 PL141"
 
 foreach var of local numeric_vars {
     capture confirm variable `var'
@@ -57,18 +59,61 @@ foreach var in PL073 PL074 PL075 PL076 {
 }
 replace months_worked = 12 if months_worked > 12 & !missing(months_worked)
 
-* POST-TRANSFER
+* POST-TRANSFER INCOME (already equivalised)
 gen eq_hh_ils_post = HX090
-label variable eq_hh_ils_post "Equivalised income POST-transfer"
 
-* PRE-TRANSFER
+* PRE-TRANSFER INCOME (HY023 / equivalence scale = HX050)
 gen eq_hh_ils_pre = HY023 / HX050 if !missing(HY023) & !missing(HX050) & HX050 > 0
-label variable eq_hh_ils_pre "Equivalised income PRE-transfer"
 
 drop if missing(eq_hh_ils_post) | missing(dwt) | missing(age)
 
 *===============================================================================
-* POVERTY THRESHOLD
+* HOUSEHOLD COMPOSITION AND TYPE
+*===============================================================================
+di _n "=== Creating household composition variables ===" _n
+
+capture confirm variable id_hh
+if _rc == 0 {
+    gen hh_id = id_hh
+}
+else {
+    capture confirm variable HB030
+    if _rc == 0 {
+        gen hh_id = HB030
+    }
+    else {
+        capture confirm variable DB030
+        if _rc == 0 {
+            gen hh_id = DB030
+        }
+        else {
+            di as error "No household ID found"
+            exit 1
+        }
+    }
+}
+
+bysort year hh_id: egen n_adults = total(age >= 14)
+bysort year hh_id: egen n_children = total(age < 14)
+bysort year hh_id: egen hh_size = count(hh_id)
+
+gen hh_type = .
+replace hh_type = 1 if n_adults == 1 & n_children == 0
+replace hh_type = 2 if n_adults == 1 & n_children == 1
+replace hh_type = 3 if n_adults == 1 & n_children >= 2
+replace hh_type = 4 if n_adults == 2 & n_children == 0
+replace hh_type = 5 if n_adults == 2 & n_children == 1
+replace hh_type = 6 if n_adults == 2 & n_children == 2
+replace hh_type = 7 if n_adults == 2 & n_children >= 3
+replace hh_type = 8 if n_adults >= 3 & n_children == 0
+replace hh_type = 9 if n_adults >= 3 & n_children >= 1
+replace hh_type = 10 if missing(hh_type)
+
+label define hh_type_lbl 1 "1 Erwachsener" 2 "1 Erwachsener + 1 Kind" 3 "1 Erwachsener + 2+ Kinder" 4 "2 Erwachsene" 5 "2 Erwachsene + 1 Kind" 6 "2 Erwachsene + 2 Kinder" 7 "2 Erwachsene + 3+ Kinder" 8 "3+ Erwachsene" 9 "3+ Erwachsene mit Kindern" 10 "Sonstige"
+label values hh_type hh_type_lbl
+
+*===============================================================================
+* POVERTY THRESHOLD (based on POST-transfer income)
 *===============================================================================
 tempfile thresholds
 tempname h
@@ -87,699 +132,910 @@ merge m:1 year using `thresholds', nogen
 replace pov_threshold_60 = round(pov_threshold_60, 1)
 
 *===============================================================================
-* POVERTY STATUS
+* POVERTY STATUS - PRE AND POST
 *===============================================================================
 gen byte arop_post = (eq_hh_ils_post < pov_threshold_60) if !missing(pov_threshold_60)
-gen byte arop_pre = (eq_hh_ils_pre < pov_threshold_60) if !missing(pov_threshold_60) & !missing(eq_hh_ils_pre)
-
 gen worker = (months_worked > 6 & age >= 18 & age <= 64)
 gen inwork_poor_post = (worker == 1 & arop_post == 1)
+
+gen byte arop_pre = (eq_hh_ils_pre < pov_threshold_60) if !missing(pov_threshold_60) & !missing(eq_hh_ils_pre)
 gen inwork_poor_pre = (worker == 1 & arop_pre == 1)
 
-*===============================================================================
-* LABOR MARKET CLASSIFICATIONS - KORRIGIERT
-*===============================================================================
-di _n "=== Creating labor market classifications ===" _n
+gen axi_post = (arop_post == 1 & inwork_poor_post == 0) if !missing(arop_post)
+gen axi_pre = (arop_pre == 1 & inwork_poor_pre == 0) if !missing(arop_pre)
 
-* OCCUPATION - kombiniert PL051 (2017-2020) und PL051A (2021-2024)
-gen occ_cat = .
-
-capture confirm variable PL051A
+* Sex variable
+capture confirm variable PB150
 if _rc == 0 {
-    replace occ_cat = 1 if (PL051A == 1 | (PL051A >= 11 & PL051A <= 14)) & year >= 2021
-    replace occ_cat = 2 if (PL051A == 2 | (PL051A >= 21 & PL051A <= 26)) & year >= 2021
-    replace occ_cat = 3 if (PL051A == 3 | (PL051A >= 31 & PL051A <= 35)) & year >= 2021
-    replace occ_cat = 4 if (PL051A == 4 | (PL051A >= 41 & PL051A <= 44)) & year >= 2021
-    replace occ_cat = 5 if (PL051A == 5 | (PL051A >= 51 & PL051A <= 54)) & year >= 2021
-    replace occ_cat = 6 if (PL051A == 6 | (PL051A >= 61 & PL051A <= 63)) & year >= 2021
-    replace occ_cat = 7 if (PL051A == 7 | (PL051A >= 71 & PL051A <= 75)) & year >= 2021
-    replace occ_cat = 8 if (PL051A == 8 | (PL051A >= 81 & PL051A <= 83)) & year >= 2021
-    replace occ_cat = 9 if (PL051A == 9 | (PL051A >= 91 & PL051A <= 96)) & year >= 2021
-    replace occ_cat = 10 if PL051A == 0 & year >= 2021
+    gen sex = PB150
+    label define sex_lbl 1 "Male" 2 "Female"
+    label values sex sex_lbl
+}
+else {
+    gen sex = .
 }
 
-capture confirm variable PL051
+*===============================================================================
+* CREATE HARMONIZED EMPLOYMENT VARIABLES
+*===============================================================================
+di _n "=== Creating harmonized employment variables ===" _n
+
+*-------------------------------------------------------------------------------
+* 1. OCCUPATION (ISCO-08) - Major Groups
+*-------------------------------------------------------------------------------
+di "Creating ISCO major groups..."
+
+gen isco_major = .
+
+* PL051 (2017–2020), PL051A (2021–2024)
+gen isco_raw = .
+replace isco_raw = PL051 if inrange(year, 2017, 2020) & !missing(PL051)
+replace isco_raw = PL051A if inrange(year, 2021, 2024) & !missing(PL051A)
+
+* Create major groups (ISCO 1-digit categories or grouped codes 0–9)
+* Armed forces
+	replace isco_major = 0 if inrange(isco_raw, 0, 3)
+
+* Managers & Senior Officials (General)
+	replace isco_major = 1 if inrange(isco_raw, 11, 13)
+
+* Hospitality, Retail & Service Managers
+	replace isco_major = 2 if isco_raw == 14
+
+* Health Professionals (Doctors, Specialists)
+	replace isco_major = 3 if isco_raw == 22
+
+* Health Associate Professionals (Nurses, Med-Techs)
+	replace isco_major = 4 if isco_raw == 32
+
+* Teaching Professionals (University, Secondary & Primary Teachers)
+	replace isco_major = 5 if isco_raw == 23
+
+* Teaching Associate Professionals (Pre-school, Vocational Trainers)
+	replace isco_major = 6 if isco_raw == 33
+
+* Science, ICT & Engineering Professionals
+	replace isco_major = 7 if inlist(isco_raw, 21, 25)
+
+* Business, Legal & Social Professionals
+	replace isco_major = 8 if inlist(isco_raw, 24, 26)
+
+* Technical, Business & Cultural Associate Professionals
+	replace isco_major = 9 if inlist(isco_raw, 31, 34, 35)
+
+* Clerical Support Workers
+	replace isco_major = 10 if inrange(isco_raw, 41, 44)
+
+* Sales & Service Workers (Personal Service, Sales)
+	replace isco_major = 11 if inrange(isco_raw, 51, 52)
+
+* Personal Care & Protective Services
+	replace isco_major = 12 if inlist(isco_raw, 53, 54)
+
+* Skilled Manual, Agricultural & Fishery Workers
+	replace isco_major = 13 if inrange(isco_raw, 61, 75)
+
+* Plant Operators, Assemblers & Drivers
+	replace isco_major = 14 if inrange(isco_raw, 81, 83)
+
+* Elementary Occupations (Cleaners, Helpers, Labourers)
+	replace isco_major = 15 if inrange(isco_raw, 91, 96)
+
+label define isco_major_lbl 0 "Armed forces" 1 "General Managers" 2 "Hospitality & Retail Managers" 3 "Health Professionals" 4 "Health Associates" 5 "Teaching Professionals" 6 "Teaching Associates" 7 "Science & ICT Professionals" 8 "Business & Legal Professionals" 9 "Technical & Business Associates" 10 "Clerical Support" 11 "Sales & Service Workers" 12 "Care & Protection" 13 "Skilled Manual & Agri" 14 "Operators & Logistics" 15 "Elementary Occupations"
+
+label values isco_major isco_major_lbl
+
+
+*-------------------------------------------------------------------------------
+* 2. ECONOMIC ACTIVITY (NACE)
+*-------------------------------------------------------------------------------
+di "Creating NACE sectors..."
+
+gen nace_sector = .
+
+* -------------------------
+* 2017–2020: PL111 (string)
+* -------------------------
+capture confirm variable PL111
 if _rc == 0 {
-    replace occ_cat = 1 if (PL051 == 1 | (PL051 >= 11 & PL051 <= 14)) & year <= 2020
-    replace occ_cat = 2 if (PL051 == 2 | (PL051 >= 21 & PL051 <= 26)) & year <= 2020
-    replace occ_cat = 3 if (PL051 == 3 | (PL051 >= 31 & PL051 <= 35)) & year <= 2020
-    replace occ_cat = 4 if (PL051 == 4 | (PL051 >= 41 & PL051 <= 44)) & year <= 2020
-    replace occ_cat = 5 if (PL051 == 5 | (PL051 >= 51 & PL051 <= 54)) & year <= 2020
-    replace occ_cat = 6 if (PL051 == 6 | (PL051 >= 61 & PL051 <= 63)) & year <= 2020
-    replace occ_cat = 7 if (PL051 == 7 | (PL051 >= 71 & PL051 <= 75)) & year <= 2020
-    replace occ_cat = 8 if (PL051 == 8 | (PL051 >= 81 & PL051 <= 83)) & year <= 2020
-    replace occ_cat = 9 if (PL051 == 9 | (PL051 >= 91 & PL051 <= 96)) & year <= 2020
-    replace occ_cat = 10 if PL051 == 0 & year <= 2020
+    capture confirm string variable PL111
+    if _rc == 0 {
+        replace nace_sector = 1 if PL111 == "a" & inrange(year, 2017, 2020)
+        replace nace_sector = 2 if PL111 == "b - e" & inrange(year, 2017, 2020)
+        replace nace_sector = 3 if PL111 == "f" & inrange(year, 2017, 2020)
+        replace nace_sector = 4 if PL111 == "g" & inrange(year, 2017, 2020)
+        replace nace_sector = 5 if PL111 == "h" & inrange(year, 2017, 2020)
+        replace nace_sector = 6 if PL111 == "i" & inrange(year, 2017, 2020)
+        replace nace_sector = 7 if PL111 == "j" & inrange(year, 2017, 2020)
+        replace nace_sector = 8 if PL111 == "k" & inrange(year, 2017, 2020)
+        replace nace_sector = 9 if PL111 == "l - n" & inrange(year, 2017, 2020)
+        replace nace_sector = 10 if PL111 == "o" & inrange(year, 2017, 2020)
+        replace nace_sector = 11 if PL111 == "p" & inrange(year, 2017, 2020)
+        replace nace_sector = 12 if PL111 == "q" & inrange(year, 2017, 2020)
+        replace nace_sector = 13 if PL111 == "r - u" & inrange(year, 2017, 2020)
+    }
 }
 
-label define occ_lbl 1 "Managers" 2 "Professionals" 3 "Technicians" 4 "Clerical" 5 "Service/Sales" 6 "Agriculture" 7 "Craft" 8 "Operators" 9 "Elementary" 10 "Armed Forces"
-label values occ_cat occ_lbl
-
-
-* CONTRACT TYPE - kombiniert PL140 (2 cat) und PL141 (4 cat)
-gen contract_cat = .
-
-capture confirm variable PL141
+* -------------------------
+* 2021–2024: PL111A (string)
+* -------------------------
+capture confirm variable PL111A
 if _rc == 0 {
-    replace contract_cat = 1 if PL141 == 21 & year >= 2021  
-    replace contract_cat = 2 if PL141 == 22 & year >= 2021  
-    replace contract_cat = 3 if PL141 == 11 & year >= 2021 
-    replace contract_cat = 4 if PL141 == 12 & year >= 2021 
+    capture confirm string variable PL111A
+    if _rc == 0 {
+        replace nace_sector = 1 if PL111A == "a" & inrange(year, 2021, 2024)
+        replace nace_sector = 2 if PL111A == "b - e" & inrange(year, 2021, 2024)
+        replace nace_sector = 3 if PL111A == "f" & inrange(year, 2021, 2024)
+        replace nace_sector = 4 if PL111A == "g" & inrange(year, 2021, 2024)
+        replace nace_sector = 5 if PL111A == "h" & inrange(year, 2021, 2024)
+        replace nace_sector = 6 if PL111A == "i" & inrange(year, 2021, 2024)
+        replace nace_sector = 7 if PL111A == "j" & inrange(year, 2021, 2024)
+        replace nace_sector = 8 if PL111A == "k" & inrange(year, 2021, 2024)
+        replace nace_sector = 9 if PL111A == "l - n" & inrange(year, 2021, 2024)
+        replace nace_sector = 10 if PL111A == "o" & inrange(year, 2021, 2024)
+        replace nace_sector = 11 if PL111A == "p" & inrange(year, 2021, 2024)
+        replace nace_sector = 12 if PL111A == "q" & inrange(year, 2021, 2024)
+        replace nace_sector = 13 if PL111A == "r - u" & inrange(year, 2021, 2024)
+    }
 }
+label define nace_lbl 1 "A: Agriculture" 2 "B-E: Industry" 3 "F: Construction" 4 "G: Trade" 5 "H: Transport" 6 "I: Accommodation/Food" 7 "J: ICT" 8 "K: Finance" 9 "L-N: Business Services" 10 "O: Public Admin" 11 "P: Education" 12 "Q: Health/Social" 13 "R-U: Other Services"
+label values nace_sector nace_lbl
 
-capture confirm variable PL140
-if _rc == 0 {
-    replace contract_cat = 1 if PL140 == 1 & year <= 2020  
-    replace contract_cat = 3 if PL140 == 2 & year <= 2020  
-}
+tab nace_sector year, missing
 
-label define contract_lbl 1 "Permanent (written)" 2 "Permanent (verbal)" 3 "Fixed-term (written)" 4 "Fixed-term (verbal)"
-label values contract_cat contract_lbl
+*-------------------------------------------------------------------------------
+* 3. CONTRACT TYPE
+*-------------------------------------------------------------------------------
+di "Creating contract type variable..."
 
-* EMPLOYMENT STATUS - kombiniert PL040 und PL040A
-gen empl_status = .
+gen contract_type = .
 
-capture confirm variable PL040A
-if _rc == 0 {
-    replace empl_status = 1 if PL040A == 1 & year >= 2021
-    replace empl_status = 2 if PL040A == 2 & year >= 2021
-    replace empl_status = 3 if PL040A == 3 & year >= 2021
-    replace empl_status = 4 if PL040A == 4 & year >= 2021
-}
+* 2017-2019: PL140 (1=permanent, 2=temporary)
+replace contract_type = 1 if PL140 == 1 & year < 2020  
+replace contract_type = 2 if PL140 == 2 & year < 2020  
+* 2020-2024: PL141 (11/12=fixed-term, 21/22=permanent)
 
-capture confirm variable PL040
-if _rc == 0 {
-    replace empl_status = 1 if PL040 == 1 & year <= 2020
-    replace empl_status = 2 if PL040 == 2 & year <= 2020
-    replace empl_status = 3 if PL040 == 3 & year <= 2020
-    replace empl_status = 4 if PL040 == 4 & year <= 2020
-}
+replace contract_type = 1 if inlist(PL141, 21, 22) & year >= 2020  
+replace contract_type = 2 if inlist(PL141, 11, 12) & year >= 2020  
 
-label define empl_lbl 1 "Self-employed (with employees)" 2 "Self-employed (without employees)" 3 "Employee" 4 "Family worker"
-label values empl_status empl_lbl
+label define contract_lbl 1 "Permanent" 2 "Temporary/Fixed-term"
+label values contract_type contract_lbl
+
+tab contract_type year, missing
+
+*-------------------------------------------------------------------------------
+* 4. WORK INTENSITY (5-Stunden-Schritte)
+*-------------------------------------------------------------------------------
+di "Creating work intensity categories (5-hour intervals)..."
+
+* Hours per week in main job
+gen hours_main = PL060 if !missing(PL060)
+
+* Hours in additional jobs
+gen hours_add = PL100 if !missing(PL100)
+replace hours_add = 0 if missing(hours_add)
+
+* Total hours
+gen hours_total = hours_main + hours_add if !missing(hours_main)
+
+* Months full-time vs part-time
+gen months_ft = PL073 if !missing(PL073)
+replace months_ft = 0 if missing(months_ft)
+
+gen months_pt = PL074 if !missing(PL074)
+replace months_pt = 0 if missing(months_pt)
+
+* Create detailed work intensity categories (5h steps)
+gen work_intensity = .
+
+replace work_intensity = 1 if hours_main >= 0  & hours_main < 5
+replace work_intensity = 2 if hours_main >= 5  & hours_main < 10
+replace work_intensity = 3 if hours_main >= 10 & hours_main < 15
+replace work_intensity = 4 if hours_main >= 15 & hours_main < 20
+replace work_intensity = 5 if hours_main >= 20 & hours_main < 25
+replace work_intensity = 6 if hours_main >= 25 & hours_main < 30
+replace work_intensity = 7 if hours_main >= 30 & hours_main < 35
+replace work_intensity = 8 if hours_main >= 35 & hours_main < 40
+replace work_intensity = 9 if hours_main >= 40 & hours_main < 45
+replace work_intensity = 10 if hours_main >= 45 & !missing(hours_main)
+
+label define intensity5_lbl 1 "0–4h" 2 "5–9h" 3 "10–14h" 4 "15–19h" 5 "20–24h" 6 "25–29h" 7 "30–34h" 8 "35–39h" 9 "40–44h" 10 "45h+"
+
+label values work_intensity intensity5_lbl
+
+tab work_intensity year, missing
+
+
+* SAVE ORIGINAL DATA
+tempfile original_data
+save `original_data', replace
 
 *===============================================================================
-* CALCULATE STATISTICS - OCCUPATION
+* HOUSEHOLD TYPE LABELS
 *===============================================================================
-di _n "=== Calculating statistics by occupation ===" _n
-
-* Reference totals
-foreach yr of local years {
-    quietly count if year == `yr' & worker == 1
-    if r(N) == 0 continue
-    
-    sum dwt if year == `yr' & worker == 1
-    local ref_workers_`yr' = r(sum)
-    
-    gen temp_iwp_post_total_`yr' = inwork_poor_post * dwt if year == `yr' & worker == 1
-    sum temp_iwp_post_total_`yr'
-    local ref_iwp_post_`yr' = r(sum)
-    drop temp_iwp_post_total_`yr'
-    
-    gen temp_iwp_pre_total_`yr' = inwork_poor_pre * dwt if year == `yr' & worker == 1
-    sum temp_iwp_pre_total_`yr'
-    local ref_iwp_pre_`yr' = r(sum)
-    drop temp_iwp_pre_total_`yr'
-}
-
-* By occupation
-foreach yr of local years {
-    forvalues oc = 1/10 {
-        quietly count if year == `yr' & occ_cat == `oc' & worker == 1
-        if r(N) == 0 {
-            local iwp_rate_post_occ`oc'_`yr' = .
-            local iwp_rate_pre_occ`oc'_`yr' = .
-            local n_workers_occ`oc'_`yr' = .
-            local n_iwp_post_occ`oc'_`yr' = .
-            local n_iwp_pre_occ`oc'_`yr' = .
-            local share_workers_occ`oc'_`yr' = .
-            local share_iwp_post_occ`oc'_`yr' = .
-            local share_iwp_pre_occ`oc'_`yr' = .
-            continue
-        }
-        
-        sum dwt if year == `yr' & occ_cat == `oc' & worker == 1
-        local n_workers_occ`oc'_`yr' = r(sum)
-        local share_workers_occ`oc'_`yr' = (`n_workers_occ`oc'_`yr'' / `ref_workers_`yr'') * 100
-        
-        * POST
-        sum inwork_poor_post [aw=dwt] if year == `yr' & occ_cat == `oc' & worker == 1
-        local iwp_rate_post_occ`oc'_`yr' = r(mean) * 100
-        
-        gen temp_iwp_post = inwork_poor_post * dwt if year == `yr' & occ_cat == `oc' & worker == 1
-        sum temp_iwp_post
-        local n_iwp_post_occ`oc'_`yr' = r(sum)
-        drop temp_iwp_post
-        
-        if `ref_iwp_post_`yr'' > 0 {
-            local share_iwp_post_occ`oc'_`yr' = (`n_iwp_post_occ`oc'_`yr'' / `ref_iwp_post_`yr'') * 100
-        }
-        
-        * PRE
-        sum inwork_poor_pre [aw=dwt] if year == `yr' & occ_cat == `oc' & worker == 1
-        local iwp_rate_pre_occ`oc'_`yr' = r(mean) * 100
-        
-        gen temp_iwp_pre = inwork_poor_pre * dwt if year == `yr' & occ_cat == `oc' & worker == 1
-        sum temp_iwp_pre
-        local n_iwp_pre_occ`oc'_`yr' = r(sum)
-        drop temp_iwp_pre
-        
-        if `ref_iwp_pre_`yr'' > 0 {
-            local share_iwp_pre_occ`oc'_`yr' = (`n_iwp_pre_occ`oc'_`yr'' / `ref_iwp_pre_`yr'') * 100
-        }
-    }
-}
+local hh_label_1 "1 Erwachsener"
+local hh_label_2 "1 Erwachsener + 1 Kind"
+local hh_label_3 "1 Erwachsener + 2+ Kinder"
+local hh_label_4 "2 Erwachsene"
+local hh_label_5 "2 Erwachsene + 1 Kind"
+local hh_label_6 "2 Erwachsene + 2 Kinder"
+local hh_label_7 "2 Erwachsene + 3+ Kinder"
+local hh_label_8 "3+ Erwachsene"
+local hh_label_9 "3+ Erwachsene mit Kindern"
+local hh_label_10 "Sonstige"
 
 *===============================================================================
-* CALCULATE STATISTICS - INDUSTRY
+* DEFINE ANALYSIS VARIABLES AND THEIR CATEGORIES
 *===============================================================================
-foreach yr of local years {
-    forvalues ic = 1/13 {
-        quietly count if year == `yr' & ind_cat == `ic' & worker == 1
-        if r(N) == 0 {
-            local iwp_rate_post_ind`ic'_`yr' = .
-            local iwp_rate_pre_ind`ic'_`yr' = .
-            local n_workers_ind`ic'_`yr' = .
-            local n_iwp_post_ind`ic'_`yr' = .
-            local n_iwp_pre_ind`ic'_`yr' = .
-            local share_workers_ind`ic'_`yr' = .
-            local share_iwp_post_ind`ic'_`yr' = .
-            local share_iwp_pre_ind`ic'_`yr' = .
-            continue
-        }
-        
-        sum dwt if year == `yr' & ind_cat == `ic' & worker == 1
-        local n_workers_ind`ic'_`yr' = r(sum)
-        local share_workers_ind`ic'_`yr' = (`n_workers_ind`ic'_`yr'' / `ref_workers_`yr'') * 100
-        
-        * POST
-        sum inwork_poor_post [aw=dwt] if year == `yr' & ind_cat == `ic' & worker == 1
-        local iwp_rate_post_ind`ic'_`yr' = r(mean) * 100
-        
-        gen temp_iwp_post = inwork_poor_post * dwt if year == `yr' & ind_cat == `ic' & worker == 1
-        sum temp_iwp_post
-        local n_iwp_post_ind`ic'_`yr' = r(sum)
-        drop temp_iwp_post
-        
-        if `ref_iwp_post_`yr'' > 0 {
-            local share_iwp_post_ind`ic'_`yr' = (`n_iwp_post_ind`ic'_`yr'' / `ref_iwp_post_`yr'') * 100
-        }
-        
-        * PRE
-        sum inwork_poor_pre [aw=dwt] if year == `yr' & ind_cat == `ic' & worker == 1
-        local iwp_rate_pre_ind`ic'_`yr' = r(mean) * 100
-        
-        gen temp_iwp_pre = inwork_poor_pre * dwt if year == `yr' & ind_cat == `ic' & worker == 1
-        sum temp_iwp_pre
-        local n_iwp_pre_ind`ic'_`yr' = r(sum)
-        drop temp_iwp_pre
-        
-        if `ref_iwp_pre_`yr'' > 0 {
-            local share_iwp_pre_ind`ic'_`yr' = (`n_iwp_pre_ind`ic'_`yr'' / `ref_iwp_pre_`yr'') * 100
-        }
-    }
-}
 
-*===============================================================================
-* CALCULATE STATISTICS - CONTRACT TYPE
-*===============================================================================
-foreach yr of local years {
-    forvalues cc = 1/4 {
-        quietly count if year == `yr' & contract_cat == `cc' & worker == 1
-        if r(N) == 0 {
-            local iwp_rate_post_contract`cc'_`yr' = .
-            local iwp_rate_pre_contract`cc'_`yr' = .
-            local n_workers_contract`cc'_`yr' = .
-            local n_iwp_post_contract`cc'_`yr' = .
-            local n_iwp_pre_contract`cc'_`yr' = .
-            local share_workers_contract`cc'_`yr' = .
-            local share_iwp_post_contract`cc'_`yr' = .
-            local share_iwp_pre_contract`cc'_`yr' = .
-            continue
-        }
-        
-        sum dwt if year == `yr' & contract_cat == `cc' & worker == 1
-        local n_workers_contract`cc'_`yr' = r(sum)
-        local share_workers_contract`cc'_`yr' = (`n_workers_contract`cc'_`yr'' / `ref_workers_`yr'') * 100
-        
-        * POST
-        sum inwork_poor_post [aw=dwt] if year == `yr' & contract_cat == `cc' & worker == 1
-        local iwp_rate_post_contract`cc'_`yr' = r(mean) * 100
-        
-        gen temp_iwp_post = inwork_poor_post * dwt if year == `yr' & contract_cat == `cc' & worker == 1
-        sum temp_iwp_post
-        local n_iwp_post_contract`cc'_`yr' = r(sum)
-        drop temp_iwp_post
-        
-        if `ref_iwp_post_`yr'' > 0 {
-            local share_iwp_post_contract`cc'_`yr' = (`n_iwp_post_contract`cc'_`yr'' / `ref_iwp_post_`yr'') * 100
-        }
-        
-        * PRE
-        sum inwork_poor_pre [aw=dwt] if year == `yr' & contract_cat == `cc' & worker == 1
-        local iwp_rate_pre_contract`cc'_`yr' = r(mean) * 100
-        
-        gen temp_iwp_pre = inwork_poor_pre * dwt if year == `yr' & contract_cat == `cc' & worker == 1
-        sum temp_iwp_pre
-        local n_iwp_pre_contract`cc'_`yr' = r(sum)
-        drop temp_iwp_pre
-        
-        if `ref_iwp_pre_`yr'' > 0 {
-            local share_iwp_pre_contract`cc'_`yr' = (`n_iwp_pre_contract`cc'_`yr'' / `ref_iwp_pre_`yr'') * 100
-        }
-    }
-}
+* Variable 1: ISCO Major Groups (0–15, detailed version)
+local var1_name "isco_major"
+local var1_label "ISCO_Occupation"
+local var1_desc "Occupation (ISCO detailed 0–15)"
+local var1_cats "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15"
+local var1_cat0  "Armed forces"
+local var1_cat1  "General Managers"
+local var1_cat2  "Hospitality & Retail Managers"
+local var1_cat3  "Health Professionals"
+local var1_cat4  "Health Associates"
+local var1_cat5  "Teaching Professionals"
+local var1_cat6  "Teaching Associates"
+local var1_cat7  "Science & ICT Professionals"
+local var1_cat8  "Business & Legal Professionals"
+local var1_cat9  "Technical & Business Associates"
+local var1_cat10 "Clerical Support"
+local var1_cat11 "Sales & Service Workers"
+local var1_cat12 "Care & Protection"
+local var1_cat13 "Skilled Manual & Agri"
+local var1_cat14 "Operators & Logistics"
+local var1_cat15 "Elementary Occupations"
+
+* Variable 2: NACE Sectors (1-13)
+local var2_name "nace_sector"
+local var2_label "NACE_Sector"
+local var2_desc "Economic Activity (NACE)"
+local var2_cats "1 2 3 4 5 6 7 8 9 10 11 12 13"
+local var2_cat1 "A: Agriculture"
+local var2_cat2 "B-E: Industry"
+local var2_cat3 "F: Construction"
+local var2_cat4 "G: Trade"
+local var2_cat5 "H: Transport"
+local var2_cat6 "I: Accommodation/Food"
+local var2_cat7 "J: ICT"
+local var2_cat8 "K: Finance"
+local var2_cat9 "L-N: Business Services"
+local var2_cat10 "O: Public Admin"
+local var2_cat11 "P: Education"
+local var2_cat12 "Q: Health/Social"
+local var2_cat13 "R-U: Other Services"
+
+* Variable 3: Contract Type (1-2)
+local var3_name "contract_type"
+local var3_label "Contract_Type"
+local var3_desc "Contract Type"
+local var3_cats "1 2"
+local var3_cat1 "Permanent"
+local var3_cat2 "Temporary/Fixed-term"
+
+* Variable 4: Work Intensity Hours (5h intervals)
+local var4_name "work_intensity"
+local var4_label "Work_Intensity"
+local var4_desc "Work Intensity (Hours/Week, 5h intervals)"
+local var4_cats "1 2 3 4 5 6 7 8 9 10"
+local var4_cat1 "0–4h"
+local var4_cat2 "5–9h"
+local var4_cat3 "10–14h"
+local var4_cat4 "15–19h"
+local var4_cat5 "20–24h"
+local var4_cat6 "25–29h"
+local var4_cat7 "30–34h"
+local var4_cat8 "35–39h"
+local var4_cat9 "40–44h"
+local var4_cat10 "45h+"
+
+
+* Variable 5: FT/PT Status (1-4)
+local var5_name "ft_pt_status"
+local var5_label "FT_PT_Status"
+local var5_desc "Full-time/Part-time Status"
+local var5_cats "1 2 3 4"
+local var5_cat1 "Predominantly FT"
+local var5_cat2 "Predominantly PT"
+local var5_cat3 "Mixed FT/PT"
+local var5_cat4 "Self-empl/Other"
 
 *===============================================================================
-* CALCULATE STATISTICS - EMPLOYMENT STATUS
+* MAIN ANALYSIS LOOP
 *===============================================================================
-foreach yr of local years {
-    forvalues es = 1/4 {
-        quietly count if year == `yr' & empl_status == `es' & worker == 1
-        if r(N) == 0 {
-            local iwp_rate_post_empl`es'_`yr' = .
-            local iwp_rate_pre_empl`es'_`yr' = .
-            local n_workers_empl`es'_`yr' = .
-            local n_iwp_post_empl`es'_`yr' = .
-            local n_iwp_pre_empl`es'_`yr' = .
-            local share_workers_empl`es'_`yr' = .
-            local share_iwp_post_empl`es'_`yr' = .
-            local share_iwp_pre_empl`es'_`yr' = .
-            continue
+
+local sheet_num = 0
+
+forvalues v = 1/5 {
+    
+    use `original_data', clear
+    
+    local empvar "`var`v'_name'"
+    local sheet_label "`var`v'_label'"
+    local var_desc "`var`v'_desc'"
+    local categories "`var`v'_cats'"
+    
+    di _n "=========================================================="
+    di "=== Analyzing: `var_desc' (`empvar') ==="
+    di "==========================================================" _n
+    
+    capture confirm variable `empvar'
+    if _rc != 0 {
+        di as error "Variable `empvar' not found, skipping..."
+        continue
+    }
+    
+    * Restrict to workers only for employment variables
+    keep if worker == 1
+    
+    quietly count if !missing(`empvar')
+    if r(N) == 0 {
+        di as error "Variable `empvar' has no data, skipping..."
+        continue
+    }
+    
+    local sheet_num = `sheet_num' + 1
+    
+    *===========================================================================
+    * CALCULATE REFERENCE TOTALS
+    *===========================================================================
+    
+    foreach yr of local years {
+        quietly count if year == `yr'
+        if r(N) == 0 continue
+        
+        sum dwt if year == `yr'
+        local ref_wrk_`yr' = r(sum)
+        
+        sum dwt if year == `yr' & inwork_poor_post == 1
+        local ref_iwp_po_`yr' = r(sum)
+        
+        sum dwt if year == `yr' & inwork_poor_pre == 1
+        local ref_iwp_pr_`yr' = r(sum)
+        
+        sum dwt if year == `yr' & arop_post == 1
+        local ref_arop_po_`yr' = r(sum)
+        
+        sum dwt if year == `yr' & arop_pre == 1
+        local ref_arop_pr_`yr' = r(sum)
+        
+        * NEW: AROP without IWP reference totals
+        sum dwt if year == `yr' & axi_post == 1
+        local ref_axi_po_`yr' = r(sum)
+        
+        sum dwt if year == `yr' & axi_pre == 1
+        local ref_axi_pr_`yr' = r(sum)
+    }
+    
+    *===========================================================================
+    * OVERALL STATISTICS BY CATEGORY
+    *===========================================================================
+    
+    foreach yr of local years {
+        quietly count if year == `yr' & !missing(`empvar')
+        if r(N) == 0 continue
+        
+        * Total workers with valid data
+        sum dwt if year == `yr' & !missing(`empvar')
+        local tot_wrk_`yr' = r(sum)
+        
+        sum dwt if year == `yr' & !missing(`empvar') & inwork_poor_post == 1
+        local tot_iwp_po_`yr' = r(sum)
+        
+        sum dwt if year == `yr' & !missing(`empvar') & inwork_poor_pre == 1
+        local tot_iwp_pr_`yr' = r(sum)
+        
+        * NEW: AROP without IWP totals
+        sum dwt if year == `yr' & !missing(`empvar') & axi_post == 1
+        local tot_axi_po_`yr' = r(sum)
+        
+        sum dwt if year == `yr' & !missing(`empvar') & axi_pre == 1
+        local tot_axi_pr_`yr' = r(sum)
+        
+        * By category
+        foreach cat of local categories {
+            
+            * Initialize
+            local shr_wrk_`cat'_`yr' = .
+            local iwp_rt_po_`cat'_`yr' = .
+            local iwp_rt_pr_`cat'_`yr' = .
+            local shr_iwp_po_`cat'_`yr' = .
+            local shr_iwp_pr_`cat'_`yr' = .
+            local arop_rt_po_`cat'_`yr' = .
+            local arop_rt_pr_`cat'_`yr' = .
+            local axi_rt_po_`cat'_`yr' = .
+            local axi_rt_pr_`cat'_`yr' = .
+            local shr_axi_po_`cat'_`yr' = .
+            local shr_axi_pr_`cat'_`yr' = .
+            
+            quietly count if year == `yr' & `empvar' == `cat'
+            if r(N) == 0 continue
+            
+            * Share of workers
+            sum dwt if year == `yr' & `empvar' == `cat'
+            local n_cat = r(sum)
+            if `tot_wrk_`yr'' > 0 {
+                local shr_wrk_`cat'_`yr' = (`n_cat' / `tot_wrk_`yr'') * 100
+            }
+            
+            * IWP rate POST
+            sum inwork_poor_post [aw=dwt] if year == `yr' & `empvar' == `cat'
+            local iwp_rt_po_`cat'_`yr' = r(mean) * 100
+            
+            * IWP rate PRE
+            sum inwork_poor_pre [aw=dwt] if year == `yr' & `empvar' == `cat'
+            local iwp_rt_pr_`cat'_`yr' = r(mean) * 100
+            
+            * Share of IWP POST
+            sum dwt if year == `yr' & `empvar' == `cat' & inwork_poor_post == 1
+            local n_iwp_po = r(sum)
+            if `tot_iwp_po_`yr'' > 0 {
+                local shr_iwp_po_`cat'_`yr' = (`n_iwp_po' / `tot_iwp_po_`yr'') * 100
+            }
+            
+            * Share of IWP PRE
+            sum dwt if year == `yr' & `empvar' == `cat' & inwork_poor_pre == 1
+            local n_iwp_pr = r(sum)
+            if `tot_iwp_pr_`yr'' > 0 {
+                local shr_iwp_pr_`cat'_`yr' = (`n_iwp_pr' / `tot_iwp_pr_`yr'') * 100
+            }
+            
+            * AROP rate POST (among workers in this category)
+            sum arop_post [aw=dwt] if year == `yr' & `empvar' == `cat'
+            local arop_rt_po_`cat'_`yr' = r(mean) * 100
+            
+            * AROP rate PRE
+            sum arop_pre [aw=dwt] if year == `yr' & `empvar' == `cat'
+            local arop_rt_pr_`cat'_`yr' = r(mean) * 100
+            
+            * NEW: AROP without IWP rate POST
+            sum axi_post [aw=dwt] if year == `yr' & `empvar' == `cat'
+            local axi_rt_po_`cat'_`yr' = r(mean) * 100
+            
+            * NEW: AROP without IWP rate PRE
+            sum axi_pre [aw=dwt] if year == `yr' & `empvar' == `cat'
+            local axi_rt_pr_`cat'_`yr' = r(mean) * 100
+            
+            * NEW: Share of AROP without IWP POST
+            sum dwt if year == `yr' & `empvar' == `cat' & axi_post == 1
+            local n_axi_po = r(sum)
+            if `tot_axi_po_`yr'' > 0 {
+                local shr_axi_po_`cat'_`yr' = (`n_axi_po' / `tot_axi_po_`yr'') * 100
+            }
+            
+            * NEW: Share of AROP without IWP PRE
+            sum dwt if year == `yr' & `empvar' == `cat' & axi_pre == 1
+            local n_axi_pr = r(sum)
+            if `tot_axi_pr_`yr'' > 0 {
+                local shr_axi_pr_`cat'_`yr' = (`n_axi_pr' / `tot_axi_pr_`yr'') * 100
+            }
+        }
+    }
+    
+    *===========================================================================
+    * BY SEX
+    *===========================================================================
+    
+    quietly count if !missing(sex)
+    local has_sex = (r(N) > 0)
+    
+    if `has_sex' {
+        
+        forvalues sx = 1/2 {
+            
+            foreach yr of local years {
+                
+                * Initialize
+                local tot_wrk_s`sx'_`yr' = .
+                local tot_iwp_po_s`sx'_`yr' = .
+                local tot_iwp_pr_s`sx'_`yr' = .
+                local tot_axi_po_s`sx'_`yr' = .
+                local tot_axi_pr_s`sx'_`yr' = .
+                
+                foreach cat of local categories {
+                    local shr_wrk_s`sx'_`cat'_`yr' = .
+                    local iwp_rt_po_s`sx'_`cat'_`yr' = .
+                    local iwp_rt_pr_s`sx'_`cat'_`yr' = .
+                    local shr_iwp_po_s`sx'_`cat'_`yr' = .
+                    local shr_iwp_pr_s`sx'_`cat'_`yr' = .
+                    local arop_rt_po_s`sx'_`cat'_`yr' = .
+                    local arop_rt_pr_s`sx'_`cat'_`yr' = .
+                    local axi_rt_po_s`sx'_`cat'_`yr' = .
+                    local axi_rt_pr_s`sx'_`cat'_`yr' = .
+                    local shr_axi_po_s`sx'_`cat'_`yr' = .
+                    local shr_axi_pr_s`sx'_`cat'_`yr' = .
+                }
+                
+                quietly count if year == `yr' & !missing(`empvar') & sex == `sx'
+                if r(N) == 0 continue
+                
+                sum dwt if year == `yr' & !missing(`empvar') & sex == `sx'
+                local tot_wrk_s`sx'_`yr' = r(sum)
+                
+                sum dwt if year == `yr' & !missing(`empvar') & sex == `sx' & inwork_poor_post == 1
+                local tot_iwp_po_s`sx'_`yr' = r(sum)
+                
+                sum dwt if year == `yr' & !missing(`empvar') & sex == `sx' & inwork_poor_pre == 1
+                local tot_iwp_pr_s`sx'_`yr' = r(sum)
+                
+                * NEW: AROP without IWP by sex
+                sum dwt if year == `yr' & !missing(`empvar') & sex == `sx' & axi_post == 1
+                local tot_axi_po_s`sx'_`yr' = r(sum)
+                
+                sum dwt if year == `yr' & !missing(`empvar') & sex == `sx' & axi_pre == 1
+                local tot_axi_pr_s`sx'_`yr' = r(sum)
+                
+                foreach cat of local categories {
+                    
+                    quietly count if year == `yr' & `empvar' == `cat' & sex == `sx'
+                    if r(N) == 0 continue
+                    
+                    sum dwt if year == `yr' & `empvar' == `cat' & sex == `sx'
+                    local n_cat = r(sum)
+                    if `tot_wrk_s`sx'_`yr'' > 0 {
+                        local shr_wrk_s`sx'_`cat'_`yr' = (`n_cat' / `tot_wrk_s`sx'_`yr'') * 100
+                    }
+                    
+                    sum inwork_poor_post [aw=dwt] if year == `yr' & `empvar' == `cat' & sex == `sx'
+                    local iwp_rt_po_s`sx'_`cat'_`yr' = r(mean) * 100
+                    
+                    sum inwork_poor_pre [aw=dwt] if year == `yr' & `empvar' == `cat' & sex == `sx'
+                    local iwp_rt_pr_s`sx'_`cat'_`yr' = r(mean) * 100
+                    
+                    sum dwt if year == `yr' & `empvar' == `cat' & sex == `sx' & inwork_poor_post == 1
+                    local n_iwp_po = r(sum)
+                    if `tot_iwp_po_s`sx'_`yr'' > 0 {
+                        local shr_iwp_po_s`sx'_`cat'_`yr' = (`n_iwp_po' / `tot_iwp_po_s`sx'_`yr'') * 100
+                    }
+                    
+                    sum dwt if year == `yr' & `empvar' == `cat' & sex == `sx' & inwork_poor_pre == 1
+                    local n_iwp_pr = r(sum)
+                    if `tot_iwp_pr_s`sx'_`yr'' > 0 {
+                        local shr_iwp_pr_s`sx'_`cat'_`yr' = (`n_iwp_pr' / `tot_iwp_pr_s`sx'_`yr'') * 100
+                    }
+                    
+                    sum arop_post [aw=dwt] if year == `yr' & `empvar' == `cat' & sex == `sx'
+                    local arop_rt_po_s`sx'_`cat'_`yr' = r(mean) * 100
+                    
+                    sum arop_pre [aw=dwt] if year == `yr' & `empvar' == `cat' & sex == `sx'
+                    local arop_rt_pr_s`sx'_`cat'_`yr' = r(mean) * 100
+                    
+                    * NEW: AROP without IWP by sex and category
+                    sum axi_post [aw=dwt] if year == `yr' & `empvar' == `cat' & sex == `sx'
+                    local axi_rt_po_s`sx'_`cat'_`yr' = r(mean) * 100
+                    
+                    sum axi_pre [aw=dwt] if year == `yr' & `empvar' == `cat' & sex == `sx'
+                    local axi_rt_pr_s`sx'_`cat'_`yr' = r(mean) * 100
+                    
+                    sum dwt if year == `yr' & `empvar' == `cat' & sex == `sx' & axi_post == 1
+                    local n_axi_po = r(sum)
+                    if `tot_axi_po_s`sx'_`yr'' > 0 {
+                        local shr_axi_po_s`sx'_`cat'_`yr' = (`n_axi_po' / `tot_axi_po_s`sx'_`yr'') * 100
+                    }
+                    
+                    sum dwt if year == `yr' & `empvar' == `cat' & sex == `sx' & axi_pre == 1
+                    local n_axi_pr = r(sum)
+                    if `tot_axi_pr_s`sx'_`yr'' > 0 {
+                        local shr_axi_pr_s`sx'_`cat'_`yr' = (`n_axi_pr' / `tot_axi_pr_s`sx'_`yr'') * 100
+                    }
+                }
+            }
+        }
+    }
+    
+    *===========================================================================
+    * BY HOUSEHOLD TYPE (for IWP only)
+    *===========================================================================
+    
+    foreach yr of local years {
+        
+        quietly count if year == `yr' & !missing(`empvar') & inwork_poor_post == 1
+        if r(N) == 0 continue
+        
+        * Reference: all IWP with valid employment data
+        sum dwt if year == `yr' & !missing(`empvar') & inwork_poor_post == 1
+        local tot_iwp_hh_po_`yr' = r(sum)
+        
+        sum dwt if year == `yr' & !missing(`empvar') & inwork_poor_pre == 1
+        local tot_iwp_hh_pr_`yr' = r(sum)
+        
+        * NEW: AROP without IWP by HH type
+        sum dwt if year == `yr' & !missing(`empvar') & axi_post == 1
+        local tot_axi_hh_po_`yr' = r(sum)
+        
+        sum dwt if year == `yr' & !missing(`empvar') & axi_pre == 1
+        local tot_axi_hh_pr_`yr' = r(sum)
+        
+        forvalues ht = 1/10 {
+            
+            * Initialize
+            local shr_iwp_h`ht'_po_`yr' = .
+            local shr_iwp_h`ht'_pr_`yr' = .
+            local shr_axi_h`ht'_po_`yr' = .
+            local shr_axi_h`ht'_pr_`yr' = .
+            
+            foreach cat of local categories {
+                local iwp_rt_h`ht'_po_`cat'_`yr' = .
+                local iwp_rt_h`ht'_pr_`cat'_`yr' = .
+                local shr_cat_h`ht'_`cat'_`yr' = .
+                local axi_rt_h`ht'_po_`cat'_`yr' = .
+                local axi_rt_h`ht'_pr_`cat'_`yr' = .
+            }
+            
+            quietly count if year == `yr' & !missing(`empvar') & hh_type == `ht' & inwork_poor_post == 1
+            if r(N) == 0 continue
+            
+            * Share of IWP by HH type
+            sum dwt if year == `yr' & !missing(`empvar') & hh_type == `ht' & inwork_poor_post == 1
+            local n_iwp_ht = r(sum)
+            if `tot_iwp_hh_po_`yr'' > 0 {
+                local shr_iwp_h`ht'_po_`yr' = (`n_iwp_ht' / `tot_iwp_hh_po_`yr'') * 100
+            }
+            
+            sum dwt if year == `yr' & !missing(`empvar') & hh_type == `ht' & inwork_poor_pre == 1
+            local n_iwp_ht_pr = r(sum)
+            if `tot_iwp_hh_pr_`yr'' > 0 {
+                local shr_iwp_h`ht'_pr_`yr' = (`n_iwp_ht_pr' / `tot_iwp_hh_pr_`yr'') * 100
+            }
+            
+            * NEW: Share of AROP without IWP by HH type
+            quietly count if year == `yr' & !missing(`empvar') & hh_type == `ht' & axi_post == 1
+            if r(N) > 0 {
+                sum dwt if year == `yr' & !missing(`empvar') & hh_type == `ht' & axi_post == 1
+                local n_axi_ht = r(sum)
+                if `tot_axi_hh_po_`yr'' > 0 {
+                    local shr_axi_h`ht'_po_`yr' = (`n_axi_ht' / `tot_axi_hh_po_`yr'') * 100
+                }
+            }
+            
+            quietly count if year == `yr' & !missing(`empvar') & hh_type == `ht' & axi_pre == 1
+            if r(N) > 0 {
+                sum dwt if year == `yr' & !missing(`empvar') & hh_type == `ht' & axi_pre == 1
+                local n_axi_ht_pr = r(sum)
+                if `tot_axi_hh_pr_`yr'' > 0 {
+                    local shr_axi_h`ht'_pr_`yr' = (`n_axi_ht_pr' / `tot_axi_hh_pr_`yr'') * 100
+                }
+            }
+            
+            * IWP rate by category within HH type
+            foreach cat of local categories {
+                
+                quietly count if year == `yr' & `empvar' == `cat' & hh_type == `ht'
+                if r(N) == 0 continue
+                
+                sum inwork_poor_post [aw=dwt] if year == `yr' & `empvar' == `cat' & hh_type == `ht'
+                local iwp_rt_h`ht'_po_`cat'_`yr' = r(mean) * 100
+                
+                sum inwork_poor_pre [aw=dwt] if year == `yr' & `empvar' == `cat' & hh_type == `ht'
+                local iwp_rt_h`ht'_pr_`cat'_`yr' = r(mean) * 100
+                
+                * NEW: AROP without IWP rate by category within HH type
+                sum axi_post [aw=dwt] if year == `yr' & `empvar' == `cat' & hh_type == `ht'
+                local axi_rt_h`ht'_po_`cat'_`yr' = r(mean) * 100
+                
+                sum axi_pre [aw=dwt] if year == `yr' & `empvar' == `cat' & hh_type == `ht'
+                local axi_rt_h`ht'_pr_`cat'_`yr' = r(mean) * 100
+                
+                * Share of workers in this category within HH type
+                sum dwt if year == `yr' & `empvar' == `cat' & hh_type == `ht'
+                local n_cat_ht = r(sum)
+                sum dwt if year == `yr' & !missing(`empvar') & hh_type == `ht'
+                local n_tot_ht = r(sum)
+                if `n_tot_ht' > 0 {
+                    local shr_cat_h`ht'_`cat'_`yr' = (`n_cat_ht' / `n_tot_ht') * 100
+                }
+            }
+        }
+    }
+    
+    *===========================================================================
+    * CREATE EXCEL OUTPUT
+    *===========================================================================
+    
+    clear
+    set obs 1500
+    
+    gen str120 Indicator = ""
+    foreach yr of local years {
+        gen double Y`yr'_pre = .
+        gen double Y`yr'_post = .
+        gen double Y`yr'_Ch = .
+        gen double Y`yr'_ChPct = .
+    }
+    
+    local row = 1
+    
+    * === OVERALL ===
+    replace Indicator = "=== OVERALL: `var_desc' (WORKERS ONLY) ===" in `row'
+    local row = `row' + 1
+    replace Indicator = "" in `row'
+    local row = `row' + 1
+    
+    foreach cat of local categories {
+        
+        * Get category label via intermediate local
+        local catlabel_name "var`v'_cat`cat'"
+        local catlabel "``catlabel_name''"
+        
+        replace Indicator = "=== Category `cat': `catlabel' ===" in `row'
+        local row = `row' + 1
+        replace Indicator = "" in `row'
+        local row = `row' + 1
+        
+        replace Indicator = "  Share of workers (%)" in `row'
+        foreach yr of local years {
+            replace Y`yr'_post = `shr_wrk_`cat'_`yr'' in `row'
+        }
+        local row = `row' + 1
+        
+        replace Indicator = "  IWP rate (%)" in `row'
+        foreach yr of local years {
+            replace Y`yr'_pre = `iwp_rt_pr_`cat'_`yr'' in `row'
+            replace Y`yr'_post = `iwp_rt_po_`cat'_`yr'' in `row'
+            replace Y`yr'_Ch = `iwp_rt_po_`cat'_`yr'' - `iwp_rt_pr_`cat'_`yr'' in `row'
+            if `iwp_rt_pr_`cat'_`yr'' != . & `iwp_rt_pr_`cat'_`yr'' > 0 {
+                replace Y`yr'_ChPct = ((`iwp_rt_po_`cat'_`yr'' - `iwp_rt_pr_`cat'_`yr'') / `iwp_rt_pr_`cat'_`yr'') * 100 in `row'
+            }
+        }
+        local row = `row' + 1
+        
+        replace Indicator = "  Share of IWP (%)" in `row'
+        foreach yr of local years {
+            replace Y`yr'_pre = `shr_iwp_pr_`cat'_`yr'' in `row'
+            replace Y`yr'_post = `shr_iwp_po_`cat'_`yr'' in `row'
+            replace Y`yr'_Ch = `shr_iwp_po_`cat'_`yr'' - `shr_iwp_pr_`cat'_`yr'' in `row'
+            if `shr_iwp_pr_`cat'_`yr'' != . & `shr_iwp_pr_`cat'_`yr'' > 0 {
+                replace Y`yr'_ChPct = ((`shr_iwp_po_`cat'_`yr'' - `shr_iwp_pr_`cat'_`yr'') / `shr_iwp_pr_`cat'_`yr'') * 100 in `row'
+            }
+        }
+        local row = `row' + 1
+        
+                
+        replace Indicator = "" in `row'
+        local row = `row' + 1
+    }
+    
+    replace Indicator = "" in `row'
+    local row = `row' + 1
+    
+    * === BY SEX ===
+    if `has_sex' {
+        
+        forvalues sx = 1/2 {
+            
+            if `sx' == 1 {
+                local sex_label "MALE"
+            }
+            else {
+                local sex_label "FEMALE"
+            }
+            
+            replace Indicator = "=== BY SEX: `sex_label' ===" in `row'
+            local row = `row' + 2
+            
+            foreach cat of local categories {
+                
+                * Get category label via intermediate local
+                local catlabel_name "var`v'_cat`cat'"
+                local catlabel "``catlabel_name''"
+                
+                replace Indicator = "  Category `cat': `catlabel' - `sex_label'" in `row'
+                local row = `row' + 1
+                
+                replace Indicator = "    Share of workers (%)" in `row'
+                foreach yr of local years {
+                    replace Y`yr'_post = `shr_wrk_s`sx'_`cat'_`yr'' in `row'
+                }
+                local row = `row' + 1
+                
+                replace Indicator = "    IWP rate (%)" in `row'
+                foreach yr of local years {
+                    replace Y`yr'_pre = `iwp_rt_pr_s`sx'_`cat'_`yr'' in `row'
+                    replace Y`yr'_post = `iwp_rt_po_s`sx'_`cat'_`yr'' in `row'
+                    replace Y`yr'_Ch = `iwp_rt_po_s`sx'_`cat'_`yr'' - `iwp_rt_pr_s`sx'_`cat'_`yr'' in `row'
+                    if `iwp_rt_pr_s`sx'_`cat'_`yr'' != . & `iwp_rt_pr_s`sx'_`cat'_`yr'' > 0 {
+                        replace Y`yr'_ChPct = ((`iwp_rt_po_s`sx'_`cat'_`yr'' - `iwp_rt_pr_s`sx'_`cat'_`yr'') / `iwp_rt_pr_s`sx'_`cat'_`yr'') * 100 in `row'
+                    }
+                }
+                local row = `row' + 1
+                
+                replace Indicator = "    Share of IWP (%)" in `row'
+                foreach yr of local years {
+                    replace Y`yr'_pre = `shr_iwp_pr_s`sx'_`cat'_`yr'' in `row'
+                    replace Y`yr'_post = `shr_iwp_po_s`sx'_`cat'_`yr'' in `row'
+                    replace Y`yr'_Ch = `shr_iwp_po_s`sx'_`cat'_`yr'' - `shr_iwp_pr_s`sx'_`cat'_`yr'' in `row'
+                    if `shr_iwp_pr_s`sx'_`cat'_`yr'' != . & `shr_iwp_pr_s`sx'_`cat'_`yr'' > 0 {
+                        replace Y`yr'_ChPct = ((`shr_iwp_po_s`sx'_`cat'_`yr'' - `shr_iwp_pr_s`sx'_`cat'_`yr'') / `shr_iwp_pr_s`sx'_`cat'_`yr'') * 100 in `row'
+                    }
+                }
+                local row = `row' + 1
+
+            }
+            
+            replace Indicator = "" in `row'
+            local row = `row' + 1
+        }
+    }
+    
+    * === BY HOUSEHOLD TYPE (IWP + AROP WITHOUT IWP DECOMPOSITION) ===
+    replace Indicator = "=== BY HOUSEHOLD TYPE: POVERTY DECOMPOSITION ===" in `row'
+    local row = `row' + 2
+    
+    forvalues ht = 1/10 {
+        
+        replace Indicator = "=== HH Typ `ht': `hh_label_`ht'' ===" in `row'
+        local row = `row' + 1
+        
+        replace Indicator = "  Share of all IWP (%)" in `row'
+        foreach yr of local years {
+            replace Y`yr'_pre = `shr_iwp_h`ht'_pr_`yr'' in `row'
+            replace Y`yr'_post = `shr_iwp_h`ht'_po_`yr'' in `row'
+            replace Y`yr'_Ch = `shr_iwp_h`ht'_po_`yr'' - `shr_iwp_h`ht'_pr_`yr'' in `row'
+            if `shr_iwp_h`ht'_pr_`yr'' != . & `shr_iwp_h`ht'_pr_`yr'' > 0 {
+                replace Y`yr'_ChPct = ((`shr_iwp_h`ht'_po_`yr'' - `shr_iwp_h`ht'_pr_`yr'') / `shr_iwp_h`ht'_pr_`yr'') * 100 in `row'
+            }
+        }
+        local row = `row' + 1
+        
+        
+        replace Indicator = "" in `row'
+        local row = `row' + 1
+        
+        * IWP rate by category within this HH type
+        foreach cat of local categories {
+            
+            * Get category label via intermediate local
+            local catlabel_name "var`v'_cat`cat'"
+            local catlabel "``catlabel_name''"
+            
+            replace Indicator = "    Cat `cat' (`catlabel'): IWP rate (%)" in `row'
+            foreach yr of local years {
+                replace Y`yr'_pre = `iwp_rt_h`ht'_pr_`cat'_`yr'' in `row'
+                replace Y`yr'_post = `iwp_rt_h`ht'_po_`cat'_`yr'' in `row'
+                replace Y`yr'_Ch = `iwp_rt_h`ht'_po_`cat'_`yr'' - `iwp_rt_h`ht'_pr_`cat'_`yr'' in `row'
+                if `iwp_rt_h`ht'_pr_`cat'_`yr'' != . & `iwp_rt_h`ht'_pr_`cat'_`yr'' > 0 {
+                    replace Y`yr'_ChPct = ((`iwp_rt_h`ht'_po_`cat'_`yr'' - `iwp_rt_h`ht'_pr_`cat'_`yr'') / `iwp_rt_h`ht'_pr_`cat'_`yr'') * 100 in `row'
+                }
+            }
+            local row = `row' + 1
+            
         }
         
-        sum dwt if year == `yr' & empl_status == `es' & worker == 1
-        local n_workers_empl`es'_`yr' = r(sum)
-        local share_workers_empl`es'_`yr' = (`n_workers_empl`es'_`yr'' / `ref_workers_`yr'') * 100
-        
-        * POST
-        sum inwork_poor_post [aw=dwt] if year == `yr' & empl_status == `es' & worker == 1
-        local iwp_rate_post_empl`es'_`yr' = r(mean) * 100
-        
-        gen temp_iwp_post = inwork_poor_post * dwt if year == `yr' & empl_status == `es' & worker == 1
-        sum temp_iwp_post
-        local n_iwp_post_empl`es'_`yr' = r(sum)
-        drop temp_iwp_post
-        
-        if `ref_iwp_post_`yr'' > 0 {
-            local share_iwp_post_empl`es'_`yr' = (`n_iwp_post_empl`es'_`yr'' / `ref_iwp_post_`yr'') * 100
-        }
-        
-        * PRE
-        sum inwork_poor_pre [aw=dwt] if year == `yr' & empl_status == `es' & worker == 1
-        local iwp_rate_pre_empl`es'_`yr' = r(mean) * 100
-        
-        gen temp_iwp_pre = inwork_poor_pre * dwt if year == `yr' & empl_status == `es' & worker == 1
-        sum temp_iwp_pre
-        local n_iwp_pre_empl`es'_`yr' = r(sum)
-        drop temp_iwp_pre
-        
-        if `ref_iwp_pre_`yr'' > 0 {
-            local share_iwp_pre_empl`es'_`yr' = (`n_iwp_pre_empl`es'_`yr'' / `ref_iwp_pre_`yr'') * 100
-        }
+        replace Indicator = "" in `row'
+        local row = `row' + 1
     }
+    
+    * Clean up and export
+    keep if Indicator != ""
+    
+    foreach yr of local years {
+        format Y`yr'_pre %15.2f
+        format Y`yr'_post %15.2f
+        format Y`yr'_Ch %15.2f
+        format Y`yr'_ChPct %15.2f
+    }
+    
+    capture mkdir "$output"
+    
+    if `sheet_num' == 1 {
+        export excel "$output/Poverty_Employment_Characteristics.xlsx", replace sheet("`sheet_label'") firstrow(variables)
+    }
+    else {
+        export excel "$output/Poverty_Employment_Characteristics.xlsx", sheetmodify sheet("`sheet_label'") firstrow(variables)
+    }
+    
+    di "Sheet `sheet_label' created successfully"
 }
 
-*===============================================================================
-* CREATE EXCEL OUTPUT - OCCUPATION
-*===============================================================================
-preserve
-clear
-set obs 300
-
-gen str100 Variable = ""
-foreach yr of local years {
-    gen double Value_`yr'_pre = .
-    gen double Value_`yr'_post = .
-    gen double Value_`yr'_Ch = .
-    gen double Value_`yr'_ChPct = .
-}
-
-local row = 1
-
-*=== OCCUPATION ===
-replace Variable = "=== IN-WORK POVERTY BY OCCUPATION ===" in `row'
-local row = `row' + 1
-
-local occ_label_1 "Managers"
-local occ_label_2 "Professionals"
-local occ_label_3 "Technicians"
-local occ_label_4 "Clerical"
-local occ_label_5 "Service/Sales"
-local occ_label_6 "Agriculture"
-local occ_label_7 "Craft"
-local occ_label_8 "Operators"
-local occ_label_9 "Elementary"
-local occ_label_10 "Armed Forces"
-
-forvalues oc = 1/10 {
-    replace Variable = "" in `row'
-    local row = `row' + 1
-    
-    replace Variable = "=== `occ_label_`oc'' ===" in `row'
-    local row = `row' + 1
-    
-    replace Variable = "Share of workers (%)" in `row'
-    foreach yr of local years {
-        replace Value_`yr'_post = `share_workers_occ`oc'_`yr'' in `row'
-    }
-    local row = `row' + 1
-    
-    replace Variable = "IWP rate (%)" in `row'
-    foreach yr of local years {
-        replace Value_`yr'_pre = `iwp_rate_pre_occ`oc'_`yr'' in `row'
-        replace Value_`yr'_post = `iwp_rate_post_occ`oc'_`yr'' in `row'
-        replace Value_`yr'_Ch = `iwp_rate_post_occ`oc'_`yr'' - `iwp_rate_pre_occ`oc'_`yr'' in `row'
-        if `iwp_rate_pre_occ`oc'_`yr'' != . & `iwp_rate_pre_occ`oc'_`yr'' > 0 {
-            replace Value_`yr'_ChPct = ((`iwp_rate_post_occ`oc'_`yr'' - `iwp_rate_pre_occ`oc'_`yr'') / `iwp_rate_pre_occ`oc'_`yr'') * 100 in `row'
-        }
-    }
-    local row = `row' + 1
-    
-    replace Variable = "Share of IWP (%)" in `row'
-    foreach yr of local years {
-        replace Value_`yr'_pre = `share_iwp_pre_occ`oc'_`yr'' in `row'
-        replace Value_`yr'_post = `share_iwp_post_occ`oc'_`yr'' in `row'
-        replace Value_`yr'_Ch = `share_iwp_post_occ`oc'_`yr'' - `share_iwp_pre_occ`oc'_`yr'' in `row'
-        if `share_iwp_pre_occ`oc'_`yr'' != . & `share_iwp_pre_occ`oc'_`yr'' > 0 {
-            replace Value_`yr'_ChPct = ((`share_iwp_post_occ`oc'_`yr'' - `share_iwp_pre_occ`oc'_`yr'') / `share_iwp_pre_occ`oc'_`yr'') * 100 in `row'
-        }
-    }
-    local row = `row' + 1
-    
-    replace Variable = "Number workers" in `row'
-    foreach yr of local years {
-        replace Value_`yr'_post = `n_workers_occ`oc'_`yr'' in `row'
-    }
-    local row = `row' + 1
-    
-    replace Variable = "Number IWP" in `row'
-    foreach yr of local years {
-        replace Value_`yr'_pre = `n_iwp_pre_occ`oc'_`yr'' in `row'
-        replace Value_`yr'_post = `n_iwp_post_occ`oc'_`yr'' in `row'
-        replace Value_`yr'_Ch = `n_iwp_post_occ`oc'_`yr'' - `n_iwp_pre_occ`oc'_`yr'' in `row'
-        if `n_iwp_pre_occ`oc'_`yr'' > 0 {
-            replace Value_`yr'_ChPct = ((`n_iwp_post_occ`oc'_`yr'' - `n_iwp_pre_occ`oc'_`yr'') / `n_iwp_pre_occ`oc'_`yr'') * 100 in `row'
-        }
-    }
-    local row = `row' + 1
-}
-
-keep if Variable != ""
-
-foreach yr of local years {
-    format Value_`yr'_pre %15.2f
-    format Value_`yr'_post %15.2f
-    format Value_`yr'_Ch %15.2f
-    format Value_`yr'_ChPct %15.2f
-}
-
-export excel "$output/Poverty_LaborMarket_PrePost.xlsx", replace sheet("Occupation") firstrow(variables)
-
-restore
-
-*===============================================================================
-* CREATE EXCEL OUTPUT - INDUSTRY
-*===============================================================================
-preserve
-clear
-set obs 300
-
-gen str100 Variable = ""
-foreach yr of local years {
-    gen double Value_`yr'_pre = .
-    gen double Value_`yr'_post = .
-    gen double Value_`yr'_Ch = .
-    gen double Value_`yr'_ChPct = .
-}
-
-local row = 1
-
-replace Variable = "=== IN-WORK POVERTY BY INDUSTRY ===" in `row'
-local row = `row' + 1
-
-local ind_label_1 "Agriculture/Forestry/Fishing"
-local ind_label_2 "Mining/Manufacturing/Utilities"
-local ind_label_3 "Construction"
-local ind_label_4 "Wholesale/Retail"
-local ind_label_5 "Transportation"
-local ind_label_6 "Accommodation/Food"
-local ind_label_7 "Information/Communication"
-local ind_label_8 "Finance/Insurance"
-local ind_label_9 "Real Estate/Professional"
-local ind_label_10 "Public Admin"
-local ind_label_11 "Education"
-local ind_label_12 "Health/Social Work"
-local ind_label_13 "Other Services"
-
-forvalues ic = 1/13 {
-    replace Variable = "" in `row'
-    local row = `row' + 1
-    
-    replace Variable = "=== `ind_label_`ic'' ===" in `row'
-    local row = `row' + 1
-    
-    replace Variable = "Share of workers (%)" in `row'
-    foreach yr of local years {
-        replace Value_`yr'_post = `share_workers_ind`ic'_`yr'' in `row'
-    }
-    local row = `row' + 1
-    
-    replace Variable = "IWP rate (%)" in `row'
-    foreach yr of local years {
-        replace Value_`yr'_pre = `iwp_rate_pre_ind`ic'_`yr'' in `row'
-        replace Value_`yr'_post = `iwp_rate_post_ind`ic'_`yr'' in `row'
-        replace Value_`yr'_Ch = `iwp_rate_post_ind`ic'_`yr'' - `iwp_rate_pre_ind`ic'_`yr'' in `row'
-        if `iwp_rate_pre_ind`ic'_`yr'' != . & `iwp_rate_pre_ind`ic'_`yr'' > 0 {
-            replace Value_`yr'_ChPct = ((`iwp_rate_post_ind`ic'_`yr'' - `iwp_rate_pre_ind`ic'_`yr'') / `iwp_rate_pre_ind`ic'_`yr'') * 100 in `row'
-        }
-    }
-    local row = `row' + 1
-    
-    replace Variable = "Share of IWP (%)" in `row'
-    foreach yr of local years {
-        replace Value_`yr'_pre = `share_iwp_pre_ind`ic'_`yr'' in `row'
-        replace Value_`yr'_post = `share_iwp_post_ind`ic'_`yr'' in `row'
-        replace Value_`yr'_Ch = `share_iwp_post_ind`ic'_`yr'' - `share_iwp_pre_ind`ic'_`yr'' in `row'
-        if `share_iwp_pre_ind`ic'_`yr'' != . & `share_iwp_pre_ind`ic'_`yr'' > 0 {
-            replace Value_`yr'_ChPct = ((`share_iwp_post_ind`ic'_`yr'' - `share_iwp_pre_ind`ic'_`yr'') / `share_iwp_pre_ind`ic'_`yr'') * 100 in `row'
-        }
-    }
-    local row = `row' + 1
-    
-    replace Variable = "Number workers" in `row'
-    foreach yr of local years {
-        replace Value_`yr'_post = `n_workers_ind`ic'_`yr'' in `row'
-    }
-    local row = `row' + 1
-    
-    replace Variable = "Number IWP" in `row'
-    foreach yr of local years {
-        replace Value_`yr'_pre = `n_iwp_pre_ind`ic'_`yr'' in `row'
-        replace Value_`yr'_post = `n_iwp_post_ind`ic'_`yr'' in `row'
-        replace Value_`yr'_Ch = `n_iwp_post_ind`ic'_`yr'' - `n_iwp_pre_ind`ic'_`yr'' in `row'
-        if `n_iwp_pre_ind`ic'_`yr'' > 0 {
-            replace Value_`yr'_ChPct = ((`n_iwp_post_ind`ic'_`yr'' - `n_iwp_pre_ind`ic'_`yr'') / `n_iwp_pre_ind`ic'_`yr'') * 100 in `row'
-        }
-    }
-    local row = `row' + 1
-}
-
-keep if Variable != ""
-
-foreach yr of local years {
-    format Value_`yr'_pre %15.2f
-    format Value_`yr'_post %15.2f
-    format Value_`yr'_Ch %15.2f
-    format Value_`yr'_ChPct %15.2f
-}
-
-export excel "$output/Poverty_LaborMarket_PrePost.xlsx", sheetmodify sheet("Industry") firstrow(variables)
-
-restore
-
-*===============================================================================
-* CREATE EXCEL OUTPUT - CONTRACT TYPE
-*===============================================================================
-preserve
-clear
-set obs 300
-
-gen str100 Variable = ""
-foreach yr of local years {
-    gen double Value_`yr'_pre = .
-    gen double Value_`yr'_post = .
-    gen double Value_`yr'_Ch = .
-    gen double Value_`yr'_ChPct = .
-}
-
-local row = 1
-
-replace Variable = "=== IN-WORK POVERTY BY CONTRACT TYPE ===" in `row'
-local row = `row' + 1
-
-local contract_label_1 "Permanent (written)"
-local contract_label_2 "Permanent (verbal)"
-local contract_label_3 "Fixed-term (written)"
-local contract_label_4 "Fixed-term (verbal)"
-
-forvalues cc = 1/4 {
-    replace Variable = "" in `row'
-    local row = `row' + 1
-    
-    replace Variable = "=== `contract_label_`cc'' ===" in `row'
-    local row = `row' + 1
-    
-    replace Variable = "Share of workers (%)" in `row'
-    foreach yr of local years {
-        replace Value_`yr'_post = `share_workers_contract`cc'_`yr'' in `row'
-    }
-    local row = `row' + 1
-    
-    replace Variable = "IWP rate (%)" in `row'
-    foreach yr of local years {
-        replace Value_`yr'_pre = `iwp_rate_pre_contract`cc'_`yr'' in `row'
-        replace Value_`yr'_post = `iwp_rate_post_contract`cc'_`yr'' in `row'
-        replace Value_`yr'_Ch = `iwp_rate_post_contract`cc'_`yr'' - `iwp_rate_pre_contract`cc'_`yr'' in `row'
-        if `iwp_rate_pre_contract`cc'_`yr'' != . & `iwp_rate_pre_contract`cc'_`yr'' > 0 {
-            replace Value_`yr'_ChPct = ((`iwp_rate_post_contract`cc'_`yr'' - `iwp_rate_pre_contract`cc'_`yr'') / `iwp_rate_pre_contract`cc'_`yr'') * 100 in `row'
-        }
-    }
-    local row = `row' + 1
-    
-    replace Variable = "Share of IWP (%)" in `row'
-    foreach yr of local years {
-        replace Value_`yr'_pre = `share_iwp_pre_contract`cc'_`yr'' in `row'
-        replace Value_`yr'_post = `share_iwp_post_contract`cc'_`yr'' in `row'
-        replace Value_`yr'_Ch = `share_iwp_post_contract`cc'_`yr'' - `share_iwp_pre_contract`cc'_`yr'' in `row'
-        if `share_iwp_pre_contract`cc'_`yr'' != . & `share_iwp_pre_contract`cc'_`yr'' > 0 {
-            replace Value_`yr'_ChPct = ((`share_iwp_post_contract`cc'_`yr'' - `share_iwp_pre_contract`cc'_`yr'') / `share_iwp_pre_contract`cc'_`yr'') * 100 in `row'
-        }
-    }
-    local row = `row' + 1
-    
-    replace Variable = "Number workers" in `row'
-    foreach yr of local years {
-        replace Value_`yr'_post = `n_workers_contract`cc'_`yr'' in `row'
-    }
-    local row = `row' + 1
-    
-    replace Variable = "Number IWP" in `row'
-    foreach yr of local years {
-        replace Value_`yr'_pre = `n_iwp_pre_contract`cc'_`yr'' in `row'
-        replace Value_`yr'_post = `n_iwp_post_contract`cc'_`yr'' in `row'
-        replace Value_`yr'_Ch = `n_iwp_post_contract`cc'_`yr'' - `n_iwp_pre_contract`cc'_`yr'' in `row'
-        if `n_iwp_pre_contract`cc'_`yr'' > 0 {
-            replace Value_`yr'_ChPct = ((`n_iwp_post_contract`cc'_`yr'' - `n_iwp_pre_contract`cc'_`yr'') / `n_iwp_pre_contract`cc'_`yr'') * 100 in `row'
-        }
-    }
-    local row = `row' + 1
-}
-
-keep if Variable != ""
-
-foreach yr of local years {
-    format Value_`yr'_pre %15.2f
-    format Value_`yr'_post %15.2f
-    format Value_`yr'_Ch %15.2f
-    format Value_`yr'_ChPct %15.2f
-}
-
-export excel "$output/Poverty_LaborMarket_PrePost.xlsx", sheetmodify sheet("Contract") firstrow(variables)
-
-restore
-
-*===============================================================================
-* CREATE EXCEL OUTPUT - EMPLOYMENT STATUS
-*===============================================================================
-preserve
-clear
-set obs 300
-
-gen str100 Variable = ""
-foreach yr of local years {
-    gen double Value_`yr'_pre = .
-    gen double Value_`yr'_post = .
-    gen double Value_`yr'_Ch = .
-    gen double Value_`yr'_ChPct = .
-}
-
-local row = 1
-
-replace Variable = "=== IN-WORK POVERTY BY EMPLOYMENT STATUS ===" in `row'
-local row = `row' + 1
-
-local empl_label_1 "Self-employed (with employees)"
-local empl_label_2 "Self-employed (without employees)"
-local empl_label_3 "Employee"
-local empl_label_4 "Family worker"
-
-forvalues es = 1/4 {
-    replace Variable = "" in `row'
-    local row = `row' + 1
-    
-    replace Variable = "=== `empl_label_`es'' ===" in `row'
-    local row = `row' + 1
-    
-    replace Variable = "Share of workers (%)" in `row'
-    foreach yr of local years {
-        replace Value_`yr'_post = `share_workers_empl`es'_`yr'' in `row'
-    }
-    local row = `row' + 1
-    
-    replace Variable = "IWP rate (%)" in `row'
-    foreach yr of local years {
-        replace Value_`yr'_pre = `iwp_rate_pre_empl`es'_`yr'' in `row'
-        replace Value_`yr'_post = `iwp_rate_post_empl`es'_`yr'' in `row'
-        replace Value_`yr'_Ch = `iwp_rate_post_empl`es'_`yr'' - `iwp_rate_pre_empl`es'_`yr'' in `row'
-        if `iwp_rate_pre_empl`es'_`yr'' != . & `iwp_rate_pre_empl`es'_`yr'' > 0 {
-            replace Value_`yr'_ChPct = ((`iwp_rate_post_empl`es'_`yr'' - `iwp_rate_pre_empl`es'_`yr'') / `iwp_rate_pre_empl`es'_`yr'') * 100 in `row'
-        }
-    }
-    local row = `row' + 1
-    
-    replace Variable = "Share of IWP (%)" in `row'
-    foreach yr of local years {
-        replace Value_`yr'_pre = `share_iwp_pre_empl`es'_`yr'' in `row'
-        replace Value_`yr'_post = `share_iwp_post_empl`es'_`yr'' in `row'
-        replace Value_`yr'_Ch = `share_iwp_post_empl`es'_`yr'' - `share_iwp_pre_empl`es'_`yr'' in `row'
-        if `share_iwp_pre_empl`es'_`yr'' != . & `share_iwp_pre_empl`es'_`yr'' > 0 {
-            replace Value_`yr'_ChPct = ((`share_iwp_post_empl`es'_`yr'' - `share_iwp_pre_empl`es'_`yr'') / `share_iwp_pre_empl`es'_`yr'') * 100 in `row'
-        }
-    }
-    local row = `row' + 1
-    
-    replace Variable = "Number workers" in `row'
-    foreach yr of local years {
-        replace Value_`yr'_post = `n_workers_empl`es'_`yr'' in `row'
-    }
-    local row = `row' + 1
-    
-    replace Variable = "Number IWP" in `row'
-    foreach yr of local years {
-        replace Value_`yr'_pre = `n_iwp_pre_empl`es'_`yr'' in `row'
-        replace Value_`yr'_post = `n_iwp_post_empl`es'_`yr'' in `row'
-        replace Value_`yr'_Ch = `n_iwp_post_empl`es'_`yr'' - `n_iwp_pre_empl`es'_`yr'' in `row'
-        if `n_iwp_pre_empl`es'_`yr'' > 0 {
-            replace Value_`yr'_ChPct = ((`n_iwp_post_empl`es'_`yr'' - `n_iwp_pre_empl`es'_`yr'') / `n_iwp_pre_empl`es'_`yr'') * 100 in `row'
-        }
-    }
-    local row = `row' + 1
-}
-
-keep if Variable != ""
-
-foreach yr of local years {
-    format Value_`yr'_pre %15.2f
-    format Value_`yr'_post %15.2f
-    format Value_`yr'_Ch %15.2f
-    format Value_`yr'_ChPct %15.2f
-}
-
-export excel "$output/Poverty_LaborMarket_PrePost.xlsx", sheetmodify sheet("Employment") firstrow(variables)
-
-restore
-
-di as result _n "=== LABOR MARKET ANALYSIS COMPLETE ===" _n
-di as result "Output: Poverty_LaborMarket_PrePost.xlsx"
-di as result "Sheets: Occupation (10 cat), Industry (13 cat), Contract (4 cat), Employment (4 cat)"
+di as result _n "=== EMPLOYMENT CHARACTERISTICS ANALYSIS COMPLETE ===" _n
+di as result "Output: Poverty_Employment_Characteristics.xlsx"
+di as result "Sheets:"
+di as result "  1. ISCO_Occupation - Occupation by ISCO-08 major groups"
+di as result "  2. NACE_Sector - Economic activity by NACE sectors"
+di as result "  3. Contract_Type - Permanent vs Temporary contracts"
+di as result "  4. Work_Intensity - Hours per week categories"
+di as result "  5. FT_PT_Status - Full-time/Part-time status"
