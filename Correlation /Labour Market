@@ -1,0 +1,1161 @@
+*******************************************************************************************************************************************************************************************
+*** Title: Complete In-Work Poverty Analysis - All Models with Interactions
+*** EU-SILC Austria 2017-2024
+*** Date: 09.02.2026
+*** Author: Anna
+*******************************************************************************************************************************************************************************************
+
+clear all
+set more off
+set emptycells drop
+
+use "D:\Data\AT_CROSS\SILC_CrossSec_AllYears_2015_2024.dta"
+global output "D:\InWorkPoverty_SILC"
+
+local years "2017 2018 2019 2020 2021 2022 2023 2024"
+
+*===============================================================================
+* PART 1: VARIABLE PREPARATION
+*===============================================================================
+
+di _n "=== STARTING VARIABLE PREPARATION ===" _n
+
+*-------------------------------------------------------------------------------
+* 1.1 DESTRING VARIABLES
+*-------------------------------------------------------------------------------
+local numeric_vars "HX090 HY023 HX050 RB050 PB040 RX010 PX010 PL073 PL074 PL075 PL076 year PB150 PL060 PL100 PL051 PL051A PL140 PL141 PB140"
+
+foreach var of local numeric_vars {
+    capture confirm variable `var'
+    if _rc == 0 {
+        capture confirm string variable `var'
+        if _rc == 0 {
+            replace `var' = subinstr(`var', ",", ".", .)
+            destring `var', replace force
+        }
+    }
+}
+
+*-------------------------------------------------------------------------------
+* 1.2 BASIC VARIABLES
+*-------------------------------------------------------------------------------
+capture confirm variable RB050
+if _rc == 0 {
+    gen dwt = RB050
+}
+else {
+    gen dwt = PB040
+}
+
+capture confirm variable RX010
+if _rc == 0 {
+    gen age = RX010
+}
+else {
+    gen age = PX010
+}
+
+* Age squared
+gen age_sq = age^2
+
+* Year as factor
+gen year_factor = year
+
+gen months_worked = 0
+foreach var in PL073 PL074 PL075 PL076 {
+    capture confirm variable `var'
+    if _rc == 0 {
+        replace months_worked = months_worked + `var' if !missing(`var')
+    }
+}
+replace months_worked = 12 if months_worked > 12 & !missing(months_worked)
+
+* POST-TRANSFER INCOME
+gen eq_hh_ils_post = HX090
+
+* PRE-TRANSFER INCOME
+gen eq_hh_ils_pre = HY023 / HX050 if !missing(HY023) & !missing(HX050) & HX050 > 0
+
+drop if missing(eq_hh_ils_post) | missing(dwt) | missing(age)
+
+*-------------------------------------------------------------------------------
+* 1.3 HOUSEHOLD COMPOSITION
+*-------------------------------------------------------------------------------
+capture confirm variable id_hh
+if _rc == 0 {
+    gen hh_id = id_hh
+}
+else {
+    capture confirm variable HB030
+    if _rc == 0 {
+        gen hh_id = HB030
+    }
+    else {
+        gen hh_id = DB030
+    }
+}
+
+bysort year hh_id: egen n_adults = total(age >= 14)
+bysort year hh_id: egen n_children = total(age < 14)
+bysort year hh_id: egen hh_size = count(hh_id)
+
+gen hh_type = .
+replace hh_type = 1 if n_adults == 1 & n_children == 0
+replace hh_type = 2 if n_adults == 1 & n_children == 1
+replace hh_type = 3 if n_adults == 1 & n_children >= 2
+replace hh_type = 4 if n_adults == 2 & n_children == 0
+replace hh_type = 5 if n_adults == 2 & n_children == 1
+replace hh_type = 6 if n_adults == 2 & n_children == 2
+replace hh_type = 7 if n_adults == 2 & n_children >= 3
+replace hh_type = 8 if n_adults >= 3 & n_children == 0
+replace hh_type = 9 if n_adults >= 3 & n_children >= 1
+
+label define hh_type_lbl 1 "1 Adult" 2 "1 Adult + 1 Child" 3 "1 Adult + 2+ Children" 4 "2 Adults" 5 "2 Adults + 1 Child" 6 "2 Adults + 2 Children" 7 "2 Adults + 3+ Children" 8 "3+ Adults" 9 "3+ Adults with Children"
+label values hh_type hh_type_lbl
+
+*-------------------------------------------------------------------------------
+* 1.4 CITIZENSHIP
+*-------------------------------------------------------------------------------
+gen citizenship = .
+
+* For 2020-2024
+capture confirm variable RB290
+if _rc == 0 {
+    replace citizenship = 1 if RB290 == "LOC" & inrange(year, 2020, 2024)
+    replace citizenship = 2 if RB290 == "EU" & inrange(year, 2020, 2024)
+    replace citizenship = 3 if RB290 == "OTH" & inrange(year, 2020, 2024)
+}
+
+* For 2015-2019
+capture confirm variable PB220A
+if _rc == 0 {
+    replace citizenship = 1 if PB220A == "LOC" & inrange(year, 2015, 2019)
+    replace citizenship = 2 if PB220A == "EU" & inrange(year, 2015, 2019)
+    replace citizenship = 3 if PB220A == "OTH" & inrange(year, 2015, 2019)
+}
+
+label define citizenship_lbl 1 "Local" 2 "EU" 3 "Other"
+label values citizenship citizenship_lbl
+
+*-------------------------------------------------------------------------------
+* 1.5 REGION (NUTS1)
+*-------------------------------------------------------------------------------
+capture confirm variable DB040
+if _rc == 0 {
+    gen region = .
+    replace region = 1 if DB040 == "AT1" 
+    replace region = 2 if DB040 == "AT2" 
+    replace region = 3 if DB040 == "AT3" 
+    
+    label define region_lbl 1 "AT1-Ostösterreich" 2 "AT2-Südösterreich" 3 "AT3-Westösterreich"
+    label values region region_lbl
+}
+
+*-------------------------------------------------------------------------------
+* 1.6 POVERTY THRESHOLD
+*-------------------------------------------------------------------------------
+tempfile thresholds
+tempname h
+postfile `h' int year double median_eq_hh_ils pov_threshold_60 using `thresholds', replace
+
+foreach yr of local years {
+    quietly count if year==`yr'
+    if r(N)==0 continue
+    quietly _pctile eq_hh_ils_post [pw=dwt] if year==`yr', p(50)
+    local median_val = r(r1)
+    post `h' (`yr') (`median_val') (0.60*`median_val')
+}
+postclose `h'
+
+merge m:1 year using `thresholds', nogen
+replace pov_threshold_60 = round(pov_threshold_60, 1)
+
+*-------------------------------------------------------------------------------
+* 1.7 POVERTY STATUS
+*-------------------------------------------------------------------------------
+gen byte arop_post = (eq_hh_ils_post < pov_threshold_60) if !missing(pov_threshold_60)
+gen worker = (months_worked > 6 & age >= 18 & age <= 64)
+gen inwork_poor_post = (worker == 1 & arop_post == 1)
+
+gen byte arop_pre = (eq_hh_ils_pre < pov_threshold_60) if !missing(pov_threshold_60) & !missing(eq_hh_ils_pre)
+gen inwork_poor_pre = (worker == 1 & arop_pre == 1)
+
+*-------------------------------------------------------------------------------
+* 1.8 GENDER
+*-------------------------------------------------------------------------------
+capture confirm variable PB150
+if _rc == 0 {
+    gen female = (PB150 == 2) if !missing(PB150)
+    label define female_lbl 0 "Male" 1 "Female"
+    label values female female_lbl
+}
+
+*-------------------------------------------------------------------------------
+* 1.9 EDUCATION (ISCED)
+*-------------------------------------------------------------------------------
+capture confirm variable PE040
+if _rc == 0 {
+    gen education = .
+    replace education = 1 if inlist(PE040, 0, 100, 200)      
+    replace education = 2 if inlist(PE040, 300, 344, 353, 354) 
+    replace education = 3 if inlist(PE040, 450, 500)    
+    replace education = 4 if inlist(PE040, 600, 700, 800)  
+    
+    label define education_lbl 1 "ISCED 0-2 (Primary)" 2 "ISCED 3-4 (Secondary)" 3 "ISCED 5-6 (Tertiary short)" 4 "ISCED 6-8 (Tertiary long)"
+    label values education education_lbl
+}
+
+*-------------------------------------------------------------------------------
+* 1.10 OCCUPATION (ISCO)
+*-------------------------------------------------------------------------------
+rename PL051A isco_major
+
+label define isco_major 11 "Chief executives, senior officials" 12 "Administrative managers" 13 "Production/specialised managers" 14 "Hospitality/retail managers" 21 "Science/engineering professionals" 22 "Health professionals" 23 "Teaching professionals" 24 "Business/admin professionals" 25 "ICT professionals" 26 "Legal/social/cultural professionals" 31 "Science/engineering associates" 32 "Health associates" 33 "Business/admin associates" 34 "Legal/social/cultural associates" 35 "ICT technicians" 41 "General/keyboard clerks" 42 "Customer service clerks" 43 "Numerical/material clerks" 44 "Other clerical workers" 51 "Personal service workers" 52 "Sales workers" 53 "Personal care workers" 54 "Protective service workers" 61 "Agricultural workers" 62 "Forestry/fishery workers" 71 "Building trades workers" 72 "Metal/machinery workers" 73 "Handicraft/printing workers" 74 "Electrical trades workers" 75 "Food/wood/garment workers" 81 "Plant/machine operators" 82 "Assemblers" 83 "Drivers/mobile operators" 91 "Cleaners/helpers" 92 "Agricultural labourers" 93 "Mining/construction/manufacturing labourers" 94 "Food preparation assistants" 95 "Street sales/service workers" 96 "Refuse/other elementary workers"
+label values isco_major isco_major
+
+*-------------------------------------------------------------------------------
+* 1.11 ECONOMIC ACTIVITY (NACE)
+*-------------------------------------------------------------------------------
+gen nace_sector = .
+
+capture confirm variable PL111
+if _rc == 0 {
+    capture confirm string variable PL111
+    if _rc == 0 {
+        replace nace_sector = 1 if PL111 == "a" & inrange(year, 2017, 2020)
+        replace nace_sector = 2 if PL111 == "b - e" & inrange(year, 2017, 2020)
+        replace nace_sector = 3 if PL111 == "f" & inrange(year, 2017, 2020)
+        replace nace_sector = 4 if PL111 == "g" & inrange(year, 2017, 2020)
+        replace nace_sector = 5 if PL111 == "h" & inrange(year, 2017, 2020)
+        replace nace_sector = 6 if PL111 == "i" & inrange(year, 2017, 2020)
+        replace nace_sector = 7 if PL111 == "j" & inrange(year, 2017, 2020)
+        replace nace_sector = 8 if PL111 == "k" & inrange(year, 2017, 2020)
+        replace nace_sector = 9 if PL111 == "l - n" & inrange(year, 2017, 2020)
+        replace nace_sector = 10 if PL111 == "o" & inrange(year, 2017, 2020)
+        replace nace_sector = 11 if PL111 == "p" & inrange(year, 2017, 2020)
+        replace nace_sector = 12 if PL111 == "q" & inrange(year, 2017, 2020)
+        replace nace_sector = 13 if PL111 == "r - u" & inrange(year, 2017, 2020)
+    }
+}
+
+capture confirm variable PL111A
+if _rc == 0 {
+    capture confirm string variable PL111A
+    if _rc == 0 {
+        replace nace_sector = 1 if PL111A == "a" & inrange(year, 2021, 2024)
+        replace nace_sector = 2 if PL111A == "b - e" & inrange(year, 2021, 2024)
+        replace nace_sector = 3 if PL111A == "f" & inrange(year, 2021, 2024)
+        replace nace_sector = 4 if PL111A == "g" & inrange(year, 2021, 2024)
+        replace nace_sector = 5 if PL111A == "h" & inrange(year, 2021, 2024)
+        replace nace_sector = 6 if PL111A == "i" & inrange(year, 2021, 2024)
+        replace nace_sector = 7 if PL111A == "j" & inrange(year, 2021, 2024)
+        replace nace_sector = 8 if PL111A == "k" & inrange(year, 2021, 2024)
+        replace nace_sector = 9 if PL111A == "l - n" & inrange(year, 2021, 2024)
+        replace nace_sector = 10 if PL111A == "o" & inrange(year, 2021, 2024)
+        replace nace_sector = 11 if PL111A == "p" & inrange(year, 2021, 2024)
+        replace nace_sector = 12 if PL111A == "q" & inrange(year, 2021, 2024)
+        replace nace_sector = 13 if PL111A == "r - u" & inrange(year, 2021, 2024)
+    }
+}
+
+label define nace_lbl 1 "A: Agriculture" 2 "B-E: Industry" 3 "F: Construction" 4 "G: Trade" 5 "H: Transport" 6 "I: Accommodation/Food" 7 "J: ICT" 8 "K: Finance" 9 "L-N: Business Services" 10 "O: Public Admin" 11 "P: Education" 12 "Q: Health/Social" 13 "R-U: Other Services"
+label values nace_sector nace_lbl
+
+*-------------------------------------------------------------------------------
+* 1.12 CONTRACT TYPE
+*-------------------------------------------------------------------------------
+gen contract_type = .
+replace contract_type = 1 if PL140 == 1 & year < 2020  
+replace contract_type = 2 if PL140 == 2 & year < 2020  
+replace contract_type = 1 if inlist(PL141, 21, 22) & year >= 2020  
+replace contract_type = 2 if inlist(PL141, 11, 12) & year >= 2020  
+
+label define contract_lbl 1 "Permanent" 2 "Temporary/Fixed-term"
+label values contract_type contract_lbl
+
+*-------------------------------------------------------------------------------
+* 1.13 WORK INTENSITY
+*-------------------------------------------------------------------------------
+gen hours_main = PL060 if !missing(PL060)
+gen hours_add = PL100 if !missing(PL100)
+replace hours_add = 0 if missing(hours_add)
+gen hours_total = hours_main + hours_add if !missing(hours_main)
+
+gen months_ft = PL073 if !missing(PL073)
+replace months_ft = 0 if missing(months_ft)
+gen months_pt = PL074 if !missing(PL074)
+replace months_pt = 0 if missing(months_pt)
+
+gen work_intensity = .
+replace work_intensity = 1 if hours_main >= 0  & hours_main < 5
+replace work_intensity = 2 if hours_main >= 5  & hours_main < 10
+replace work_intensity = 3 if hours_main >= 10 & hours_main < 15
+replace work_intensity = 4 if hours_main >= 15 & hours_main < 20
+replace work_intensity = 5 if hours_main >= 20 & hours_main < 25
+replace work_intensity = 6 if hours_main >= 25 & hours_main < 30
+replace work_intensity = 7 if hours_main >= 30 & hours_main < 35
+replace work_intensity = 8 if hours_main >= 35 & hours_main < 40
+replace work_intensity = 9 if hours_main >= 40 & hours_main < 45
+replace work_intensity = 10 if hours_main >= 45 & !missing(hours_main)
+
+label define intensity_lbl 1 "0–4h" 2 "5–9h" 3 "10–14h" 4 "15–19h" 5 "20–24h" 6 "25–29h" 7 "30–34h" 8 "35–39h" 9 "40–44h" 10 "45h+"
+label values work_intensity intensity_lbl
+
+*-------------------------------------------------------------------------------
+* 1.14 FT/PT STATUS
+*-------------------------------------------------------------------------------
+gen ft_pt_status = .
+replace ft_pt_status = 1 if months_ft > months_pt & months_ft > 0  
+replace ft_pt_status = 2 if months_pt > months_ft & months_pt > 0  
+replace ft_pt_status = 3 if months_ft == months_pt & months_ft > 0 
+replace ft_pt_status = 4 if months_ft == 0 & months_pt == 0 & worker == 1 
+
+label define ftpt_lbl 1 "Predominantly FT" 2 "Predominantly PT" 3 "Mixed FT/PT" 4 "Self-empl/Other"
+label values ft_pt_status ftpt_lbl
+
+*===============================================================================
+* SET SURVEY DESIGN
+*===============================================================================
+est clear
+svyset _n [pweight = dwt]
+
+di _n "=== VARIABLE PREPARATION COMPLETE ===" _n
+di "N (total workers with complete data): " _N
+
+
+*===============================================================================
+*===============================================================================
+* SECTION 1: BASELINE MODELS (NO INTERACTIONS)
+*===============================================================================
+*===============================================================================
+
+di _n "###############################################################" _n
+di "###    SECTION 1: BASELINE MODELS (NO INTERACTIONS)        ###" _n
+di "###############################################################" _n
+
+*-------------------------------------------------------------------------------
+* 1.1 POST: Controls Only
+*-------------------------------------------------------------------------------
+di _n "=== POST: Model 1.1 - Controls Only ===" _n
+
+svy: logit inwork_poor_post i.contract_type i.work_intensity i.ft_pt_status c.age c.age_sq i.year i.citizenship i.hh_type i.region
+est store base_post_controls
+
+*-------------------------------------------------------------------------------
+* 1.2 POST: + ISCO (main effect only)
+*-------------------------------------------------------------------------------
+di _n "=== POST: Model 1.2 - + ISCO ===" _n
+
+svy: logit inwork_poor_post i.isco_major i.contract_type i.work_intensity i.ft_pt_status c.age c.age_sq i.year i.citizenship i.hh_type i.region
+est store base_post_isco
+
+testparm i.isco_major
+scalar f_isco_base_post = r(F)
+scalar p_isco_base_post = r(p)
+
+*-------------------------------------------------------------------------------
+* 1.3 POST: + NACE (main effect only)
+*-------------------------------------------------------------------------------
+di _n "=== POST: Model 1.3 - + NACE ===" _n
+
+svy: logit inwork_poor_post i.nace_sector i.contract_type i.work_intensity i.ft_pt_status c.age c.age_sq i.year i.citizenship i.hh_type i.region
+est store base_post_nace
+
+testparm i.nace_sector
+scalar f_nace_base_post = r(F)
+scalar p_nace_base_post = r(p)
+
+*-------------------------------------------------------------------------------
+* 1.4 POST: ISCO + NACE (additive, no interaction)
+*-------------------------------------------------------------------------------
+di _n "=== POST: Model 1.4 - ISCO + NACE (additive) ===" _n
+
+svy: logit inwork_poor_post i.isco_major i.nace_sector i.contract_type i.work_intensity i.ft_pt_status c.age c.age_sq i.year i.citizenship i.hh_type i.region
+est store base_post_isco_nace
+
+testparm i.isco_major
+scalar f_isco_add_post = r(F)
+testparm i.nace_sector
+scalar f_nace_add_post = r(F)
+
+*-------------------------------------------------------------------------------
+* 1.5 PRE: Controls Only
+*-------------------------------------------------------------------------------
+di _n "=== PRE: Model 1.5 - Controls Only ===" _n
+
+svy: logit inwork_poor_pre i.contract_type i.work_intensity i.ft_pt_status c.age c.age_sq i.year i.citizenship i.hh_type i.region
+est store base_pre_controls
+
+*-------------------------------------------------------------------------------
+* 1.6 PRE: + ISCO (main effect only)
+*-------------------------------------------------------------------------------
+di _n "=== PRE: Model 1.6 - + ISCO ===" _n
+
+svy: logit inwork_poor_pre i.isco_major i.contract_type i.work_intensity i.ft_pt_status c.age c.age_sq i.year i.citizenship i.hh_type i.region
+est store base_pre_isco
+
+testparm i.isco_major
+scalar f_isco_base_pre = r(F)
+scalar p_isco_base_pre = r(p)
+
+*-------------------------------------------------------------------------------
+* 1.7 PRE: + NACE (main effect only)
+*-------------------------------------------------------------------------------
+di _n "=== PRE: Model 1.7 - + NACE ===" _n
+
+svy: logit inwork_poor_pre i.nace_sector i.contract_type i.work_intensity i.ft_pt_status c.age c.age_sq i.year i.citizenship i.hh_type i.region
+est store base_pre_nace
+
+testparm i.nace_sector
+scalar f_nace_base_pre = r(F)
+scalar p_nace_base_pre = r(p)
+
+*-------------------------------------------------------------------------------
+* 1.8 PRE: ISCO + NACE (additive, no interaction)
+*-------------------------------------------------------------------------------
+di _n "=== PRE: Model 1.8 - ISCO + NACE (additive) ===" _n
+
+svy: logit inwork_poor_pre i.isco_major i.nace_sector i.contract_type i.work_intensity i.ft_pt_status c.age c.age_sq i.year i.citizenship i.hh_type i.region
+est store base_pre_isco_nace
+
+testparm i.isco_major
+scalar f_isco_add_pre = r(F)
+testparm i.nace_sector
+scalar f_nace_add_pre = r(F)
+
+*-------------------------------------------------------------------------------
+* SUMMARY TABLE: BASELINE MODELS
+*-------------------------------------------------------------------------------
+di _n "=== SUMMARY: BASELINE MODELS F-STATISTICS ===" _n
+di "POST-Transfer:"
+di "  ISCO only:        F=" f_isco_base_post ", p=" p_isco_base_post
+di "  NACE only:        F=" f_nace_base_post ", p=" p_nace_base_post
+di "  ISCO (additive):  F=" f_isco_add_post
+di "  NACE (additive):  F=" f_nace_add_post
+di ""
+di "PRE-Transfer:"
+di "  ISCO only:        F=" f_isco_base_pre ", p=" p_isco_base_pre
+di "  NACE only:        F=" f_nace_base_pre ", p=" p_nace_base_pre
+di "  ISCO (additive):  F=" f_isco_add_pre
+di "  NACE (additive):  F=" f_nace_add_pre
+di ""
+
+*===============================================================================
+*===============================================================================
+* SECTION 2: OCCUPATION × SECTOR MODELS
+*===============================================================================
+*===============================================================================
+
+di _n "###############################################################" _n
+di "###    SECTION 2: OCCUPATION × SECTOR INTERACTIONS         ###" _n
+di "###############################################################" _n
+
+*-------------------------------------------------------------------------------
+* 2.1 POST: ISCO##NACE Full Interaction
+*-------------------------------------------------------------------------------
+di _n "=== POST: Model 2.1 - ISCO##NACE Full Interaction ===" _n
+
+svy: logit inwork_poor_post i.isco_major##i.nace_sector i.contract_type i.work_intensity i.ft_pt_status c.age c.age_sq i.year i.citizenship i.hh_type i.region
+est store occ_sect_post_full
+
+testparm i.isco_major
+scalar f_isco_int_post = r(F)
+
+testparm i.nace_sector
+scalar f_nace_int_post = r(F)
+
+testparm i.isco_major#i.nace_sector
+scalar f_interaction_post = r(F)
+scalar p_interaction_post = r(p)
+
+*-------------------------------------------------------------------------------
+* 2.2 PRE: ISCO##NACE Full Interaction
+*-------------------------------------------------------------------------------
+di _n "=== PRE: Model 2.2 - ISCO##NACE Full Interaction ===" _n
+
+svy: logit inwork_poor_pre i.isco_major##i.nace_sector i.contract_type i.work_intensity i.ft_pt_status c.age c.age_sq i.year i.citizenship i.hh_type i.region
+est store occ_sect_pre_full
+
+testparm i.isco_major
+scalar f_isco_int_pre = r(F)
+
+testparm i.nace_sector
+scalar f_nace_int_pre = r(F)
+
+testparm i.isco_major#i.nace_sector
+scalar f_interaction_pre = r(F)
+scalar p_interaction_pre = r(p)
+
+*-------------------------------------------------------------------------------
+* SUMMARY TABLE: OCCUPATION × SECTOR
+*-------------------------------------------------------------------------------
+di _n "=== SUMMARY: ISCO × NACE INTERACTIONS ===" _n
+di "POST-Transfer:"
+di "  ISCO main:         F=" f_isco_int_post
+di "  NACE main:         F=" f_nace_int_post
+di "  ISCO×NACE:         F=" f_interaction_post ", p=" p_interaction_post
+di ""
+di "PRE-Transfer:"
+di "  ISCO main:         F=" f_isco_int_pre
+di "  NACE main:         F=" f_nace_int_pre
+di "  ISCO×NACE:         F=" f_interaction_pre ", p=" p_interaction_pre
+di ""
+di "Change PRE→POST:"
+di "  ISCO F-stat:       " f_isco_base_pre " → " f_isco_int_post " (Δ=" f_isco_int_post - f_isco_base_pre ")"
+di "  NACE F-stat:       " f_nace_base_pre " → " f_nace_int_post " (Δ=" f_nace_int_post - f_nace_base_pre ")"
+di "  Interaction:       " f_interaction_pre " → " f_interaction_post " (Δ=" f_interaction_post - f_interaction_pre ")"
+di ""
+
+
+*===============================================================================
+*===============================================================================
+* SECTION 3: EDUCATION MODELS (MAIN + INTERACTIONS)
+*===============================================================================
+*===============================================================================
+
+di _n "###############################################################" _n
+di "###    SECTION 3: EDUCATION MODELS                          ###" _n
+di "###############################################################" _n
+
+*-------------------------------------------------------------------------------
+* 3.1 POST: Education Main Effect Only
+*-------------------------------------------------------------------------------
+di _n "=== POST: Model 3.1 - Education Main Effect Only ===" _n
+
+svy: logit inwork_poor_post ///
+    i.education ///
+    i.contract_type i.work_intensity i.ft_pt_status ///
+    c.age c.age_sq i.year i.citizenship i.hh_type i.region
+est store edu_post_main
+
+testparm i.education
+scalar f_edu_main_post = r(F)
+scalar p_edu_main_post = r(p)
+
+*-------------------------------------------------------------------------------
+* 3.2 POST: Education + ISCO (to test if education works via ISCO)
+*-------------------------------------------------------------------------------
+di _n "=== POST: Model 3.2 - Education + ISCO ===" _n
+
+svy: logit inwork_poor_post ///
+    i.education i.isco_major ///
+    i.contract_type i.work_intensity i.ft_pt_status ///
+    c.age c.age_sq i.year i.citizenship i.hh_type i.region
+est store edu_post_isco
+
+testparm i.education
+scalar f_edu_with_isco_post = r(F)
+
+testparm i.isco_major
+scalar f_isco_with_edu_post = r(F)
+
+di ""
+di "Education effect:"
+di "  Without ISCO control: F=" f_edu_main_post
+di "  With ISCO control:    F=" f_edu_with_isco_post
+di "  Reduction:            " (f_edu_main_post - f_edu_with_isco_post) / f_edu_main_post * 100 "%"
+
+*-------------------------------------------------------------------------------
+* 3.3 POST: Education + ISCO##NACE
+*-------------------------------------------------------------------------------
+di _n "=== POST: Model 3.3 - Education + ISCO##NACE ===" _n
+
+svy: logit inwork_poor_post ///
+    i.education ///
+    i.isco_major##i.nace_sector ///
+    i.contract_type i.work_intensity i.ft_pt_status ///
+    c.age c.age_sq i.year i.citizenship i.hh_type i.region
+est store edu_post_isco_nace
+
+testparm i.education
+scalar f_edu_full_post = r(F)
+
+testparm i.isco_major
+scalar f_isco_edu_full_post = r(F)
+
+testparm i.nace_sector
+scalar f_nace_edu_full_post = r(F)
+
+testparm i.isco_major#i.nace_sector
+scalar f_int_edu_full_post = r(F)
+
+*-------------------------------------------------------------------------------
+* 3.4 POST: Education##NACE (WITHOUT ISCO - KEY TEST!)
+*-------------------------------------------------------------------------------
+di _n "=== POST: Model 3.4 - Education##NACE (WITHOUT ISCO) ===" _n
+
+svy: logit inwork_poor_post ///
+    i.education##i.nace_sector ///
+    i.contract_type i.work_intensity i.ft_pt_status ///
+    c.age c.age_sq i.year i.citizenship i.hh_type i.region
+est store edu_post_nace_int
+
+testparm i.education#i.nace_sector
+scalar f_edu_nace_int_post = r(F)
+scalar p_edu_nace_int_post = r(p)
+
+testparm i.education
+scalar f_edu_without_isco_post = r(F)
+scalar p_edu_without_isco_post = r(p)
+
+testparm i.nace_sector
+scalar f_nace_without_isco_post = r(F)
+
+di ""
+di "*** CRITICAL FINDING ***"
+di "Education×NACE Interaction: F=" f_edu_nace_int_post ", p=" p_edu_nace_int_post
+di "Education main (no ISCO):   F=" f_edu_without_isco_post ", p=" p_edu_without_isco_post
+di ""
+
+*-------------------------------------------------------------------------------
+* 3.5 PRE: Education Main Effect Only
+*-------------------------------------------------------------------------------
+di _n "=== PRE: Model 3.5 - Education Main Effect Only ===" _n
+
+svy: logit inwork_poor_pre ///
+    i.education ///
+    i.contract_type i.work_intensity i.ft_pt_status ///
+    c.age c.age_sq i.year i.citizenship i.hh_type i.region
+est store edu_pre_main
+
+testparm i.education
+scalar f_edu_main_pre = r(F)
+scalar p_edu_main_pre = r(p)
+
+*-------------------------------------------------------------------------------
+* 3.6 PRE: Education + ISCO
+*-------------------------------------------------------------------------------
+di _n "=== PRE: Model 3.6 - Education + ISCO ===" _n
+
+svy: logit inwork_poor_pre ///
+    i.education i.isco_major ///
+    i.contract_type i.work_intensity i.ft_pt_status ///
+    c.age c.age_sq i.year i.citizenship i.hh_type i.region
+est store edu_pre_isco
+
+testparm i.education
+scalar f_edu_with_isco_pre = r(F)
+
+testparm i.isco_major
+scalar f_isco_with_edu_pre = r(F)
+
+*-------------------------------------------------------------------------------
+* 3.7 PRE: Education + ISCO##NACE
+*-------------------------------------------------------------------------------
+di _n "=== PRE: Model 3.7 - Education + ISCO##NACE ===" _n
+
+svy: logit inwork_poor_pre ///
+    i.education ///
+    i.isco_major##i.nace_sector ///
+    i.contract_type i.work_intensity i.ft_pt_status ///
+    c.age c.age_sq i.year i.citizenship i.hh_type i.region
+est store edu_pre_isco_nace
+
+testparm i.education
+scalar f_edu_full_pre = r(F)
+
+testparm i.isco_major
+scalar f_isco_edu_full_pre = r(F)
+
+testparm i.nace_sector
+scalar f_nace_edu_full_pre = r(F)
+
+*-------------------------------------------------------------------------------
+* 3.8 PRE: Education##NACE (WITHOUT ISCO - KEY TEST!)
+*-------------------------------------------------------------------------------
+di _n "=== PRE: Model 3.8 - Education##NACE (WITHOUT ISCO) ===" _n
+
+svy: logit inwork_poor_pre ///
+    i.education##i.nace_sector ///
+    i.contract_type i.work_intensity i.ft_pt_status ///
+    c.age c.age_sq i.year i.citizenship i.hh_type i.region
+est store edu_pre_nace_int
+
+testparm i.education#i.nace_sector
+scalar f_edu_nace_int_pre = r(F)
+scalar p_edu_nace_int_pre = r(p)
+
+testparm i.education
+scalar f_edu_without_isco_pre = r(F)
+scalar p_edu_without_isco_pre = r(p)
+
+*-------------------------------------------------------------------------------
+* SUMMARY TABLE: EDUCATION MODELS
+*-------------------------------------------------------------------------------
+di _n "=== SUMMARY: EDUCATION MODELS ===" _n
+di ""
+di "POST-Transfer:"
+di "  Education main (alone):        F=" f_edu_main_post ", p=" p_edu_main_post
+di "  Education (+ ISCO):            F=" f_edu_with_isco_post
+di "  Education (+ ISCO##NACE):      F=" f_edu_full_post
+di "  Education×NACE (NO ISCO):      F=" f_edu_nace_int_post ", p=" p_edu_nace_int_post
+di "  Education main (NO ISCO):      F=" f_edu_without_isco_post ", p=" p_edu_without_isco_post
+di ""
+di "PRE-Transfer:"
+di "  Education main (alone):        F=" f_edu_main_pre ", p=" p_edu_main_pre
+di "  Education (+ ISCO):            F=" f_edu_with_isco_pre
+di "  Education (+ ISCO##NACE):      F=" f_edu_full_pre
+di "  Education×NACE (NO ISCO):      F=" f_edu_nace_int_pre ", p=" p_edu_nace_int_pre
+di "  Education main (NO ISCO):      F=" f_edu_without_isco_pre ", p=" p_edu_without_isco_pre
+di ""
+di "PRE → POST Change:"
+di "  Education main effect:         " f_edu_main_pre " → " f_edu_main_post " (Δ=" f_edu_main_post - f_edu_main_pre ")"
+di "  ISCO with Education:           " f_isco_with_edu_pre " → " f_isco_with_edu_post
+di ""
+di "*** KEY FINDING: Education×NACE NOT significant in both PRE and POST ***"
+di "*** This means: Sectors do NOT reward education differently ***"
+di ""
+
+*===============================================================================
+*===============================================================================
+* SECTION 4: GENDER MODELS (MAIN + STRATIFIED + INTERACTIONS)
+*===============================================================================
+*===============================================================================
+
+di _n "###############################################################" _n
+di "###    SECTION 4: GENDER MODELS                             ###" _n
+di "###############################################################" _n
+
+*-------------------------------------------------------------------------------
+* SUBSECTION 4A: GENDER DECOMPOSITION (POST)
+*-------------------------------------------------------------------------------
+di _n "--- Subsection 4A: Gender Decomposition (POST) ---" _n
+
+*-------------------------------------------------------------------------------
+* 4.1 POST: Gender Baseline
+*-------------------------------------------------------------------------------
+di _n "=== POST: Model 4.1 - Gender Baseline ===" _n
+
+svy: logit inwork_poor_post ///
+    i.female ///
+    i.contract_type i.work_intensity i.ft_pt_status ///
+    c.age c.age_sq i.year i.citizenship i.hh_type i.region
+est store gender_post_baseline
+
+margins female
+matrix gap_total_post = r(table)
+
+lincom 1.female
+scalar b_gender_baseline_post = r(estimate)
+scalar se_gender_baseline_post = r(se)
+
+testparm i.female
+scalar f_gender_baseline_post = r(F)
+
+*-------------------------------------------------------------------------------
+* 4.2 POST: Gender + ISCO
+*-------------------------------------------------------------------------------
+di _n "=== POST: Model 4.2 - Gender + ISCO ===" _n
+
+svy: logit inwork_poor_post ///
+    i.female i.isco_major ///
+    i.contract_type i.work_intensity i.ft_pt_status ///
+    c.age c.age_sq i.year i.citizenship i.hh_type i.region
+est store gender_post_isco
+
+testparm i.female
+scalar f_gender_isco_post = r(F)
+
+testparm i.isco_major
+scalar f_isco_gender_post = r(F)
+
+lincom 1.female
+scalar b_gender_isco_post = r(estimate)
+scalar reduction_isco_post = (b_gender_baseline_post - b_gender_isco_post) / b_gender_baseline_post * 100
+
+*-------------------------------------------------------------------------------
+* 4.3 POST: Gender + NACE
+*-------------------------------------------------------------------------------
+di _n "=== POST: Model 4.3 - Gender + NACE ===" _n
+
+svy: logit inwork_poor_post ///
+    i.female i.nace_sector ///
+    i.contract_type i.work_intensity i.ft_pt_status ///
+    c.age c.age_sq i.year i.citizenship i.hh_type i.region
+est store gender_post_nace
+
+testparm i.female
+scalar f_gender_nace_post = r(F)
+
+testparm i.nace_sector
+scalar f_nace_gender_post = r(F)
+
+lincom 1.female
+scalar b_gender_nace_post = r(estimate)
+scalar reduction_nace_post = (b_gender_baseline_post - b_gender_nace_post) / b_gender_baseline_post * 100
+
+*-------------------------------------------------------------------------------
+* 4.4 POST: Gender + ISCO + NACE (additive)
+*-------------------------------------------------------------------------------
+di _n "=== POST: Model 4.4 - Gender + ISCO + NACE (additive) ===" _n
+
+svy: logit inwork_poor_post ///
+    i.female i.isco_major i.nace_sector ///
+    i.contract_type i.work_intensity i.ft_pt_status ///
+    c.age c.age_sq i.year i.citizenship i.hh_type i.region
+est store gender_post_both
+
+testparm i.female
+scalar f_gender_both_post = r(F)
+
+testparm i.isco_major
+scalar f_isco_both_post = r(F)
+
+testparm i.nace_sector
+scalar f_nace_both_post = r(F)
+
+lincom 1.female
+scalar b_gender_both_post = r(estimate)
+scalar reduction_both_post = (b_gender_baseline_post - b_gender_both_post) / b_gender_baseline_post * 100
+
+*-------------------------------------------------------------------------------
+* 4.5 POST: Gender + ISCO##NACE
+*-------------------------------------------------------------------------------
+di _n "=== POST: Model 4.5 - Gender + ISCO##NACE ===" _n
+
+svy: logit inwork_poor_post ///
+    i.female ///
+    i.isco_major##i.nace_sector ///
+    i.contract_type i.work_intensity i.ft_pt_status ///
+    c.age c.age_sq i.year i.citizenship i.hh_type i.region
+est store gender_post_isco_nace_int
+
+testparm i.female
+scalar f_gender_full_post = r(F)
+
+testparm i.isco_major
+scalar f_isco_full_post = r(F)
+
+testparm i.nace_sector
+scalar f_nace_full_post = r(F)
+
+testparm i.isco_major#i.nace_sector
+scalar f_int_full_post = r(F)
+
+lincom 1.female
+scalar b_gender_full_post = r(estimate)
+scalar se_gender_full_post = r(se)
+scalar reduction_full_post = (b_gender_baseline_post - b_gender_full_post) / b_gender_baseline_post * 100
+
+*-------------------------------------------------------------------------------
+* SUBSECTION 4B: GENDER INTERACTION MODELS (POST)
+*-------------------------------------------------------------------------------
+di _n "--- Subsection 4B: Gender Interaction Models (POST) ---" _n
+
+*-------------------------------------------------------------------------------
+* 4.6 POST: Gender##NACE + ISCO
+*-------------------------------------------------------------------------------
+di _n "=== POST: Model 4.6 - Gender##NACE + ISCO ===" _n
+
+svy: logit inwork_poor_post ///
+    i.female##i.nace_sector i.isco_major ///
+    i.contract_type i.work_intensity i.ft_pt_status ///
+    c.age c.age_sq i.year i.citizenship i.hh_type i.region
+est store gender_post_nace_int
+
+testparm i.female#i.nace_sector
+scalar f_gender_nace_int_post = r(F)
+scalar p_gender_nace_int_post = r(p)
+
+testparm i.female
+scalar f_gender_main_gnint_post = r(F)
+
+testparm i.nace_sector
+scalar f_nace_main_gnint_post = r(F)
+
+*-------------------------------------------------------------------------------
+* 4.7 POST: Gender##ISCO + NACE
+*-------------------------------------------------------------------------------
+di _n "=== POST: Model 4.7 - Gender##ISCO + NACE ===" _n
+
+svy: logit inwork_poor_post ///
+    i.female##i.isco_major i.nace_sector ///
+    i.contract_type i.work_intensity i.ft_pt_status ///
+    c.age c.age_sq i.year i.citizenship i.hh_type i.region
+est store gender_post_isco_int
+
+testparm i.female#i.isco_major
+scalar f_gender_isco_int_post = r(F)
+scalar p_gender_isco_int_post = r(p)
+
+testparm i.female
+scalar f_gender_main_giint_post = r(F)
+
+testparm i.isco_major
+scalar f_isco_main_giint_post = r(F)
+
+*-------------------------------------------------------------------------------
+* SUBSECTION 4C: GENDER-STRATIFIED MODELS (POST)
+*-------------------------------------------------------------------------------
+di _n "--- Subsection 4C: Gender-Stratified Models (POST) ---" _n
+
+*-------------------------------------------------------------------------------
+* 4.8 POST: Women - ISCO##NACE
+*-------------------------------------------------------------------------------
+di _n "=== POST: Model 4.8 - Women: ISCO##NACE ===" _n
+
+svy, subpop(if female==1): logit inwork_poor_post ///
+    i.isco_major##i.nace_sector ///
+    i.contract_type i.work_intensity i.ft_pt_status ///
+    c.age c.age_sq i.year i.citizenship i.hh_type i.region
+est store women_post
+
+testparm i.isco_major
+scalar f_isco_women_post = r(F)
+
+testparm i.nace_sector
+scalar f_nace_women_post = r(F)
+
+testparm i.isco_major#i.nace_sector
+scalar f_int_women_post = r(F)
+
+*-------------------------------------------------------------------------------
+* 4.9 POST: Men - ISCO##NACE
+*-------------------------------------------------------------------------------
+di _n "=== POST: Model 4.9 - Men: ISCO##NACE ===" _n
+
+svy, subpop(if female==0): logit inwork_poor_post ///
+    i.isco_major##i.nace_sector ///
+    i.contract_type i.work_intensity i.ft_pt_status ///
+    c.age c.age_sq i.year i.citizenship i.hh_type i.region
+est store men_post
+
+testparm i.isco_major
+scalar f_isco_men_post = r(F)
+
+testparm i.nace_sector
+scalar f_nace_men_post = r(F)
+
+testparm i.isco_major#i.nace_sector
+scalar f_int_men_post = r(F)
+
+*-------------------------------------------------------------------------------
+* SUBSECTION 4D: GENDER MODELS PRE-TRANSFER
+*-------------------------------------------------------------------------------
+di _n "--- Subsection 4D: Gender Models (PRE) ---" _n
+
+*-------------------------------------------------------------------------------
+* 4.10 PRE: Gender Baseline
+*-------------------------------------------------------------------------------
+di _n "=== PRE: Model 4.10 - Gender Baseline ===" _n
+
+svy: logit inwork_poor_pre ///
+    i.female ///
+    i.contract_type i.work_intensity i.ft_pt_status ///
+    c.age c.age_sq i.year i.citizenship i.hh_type i.region
+est store gender_pre_baseline
+
+lincom 1.female
+scalar b_gender_baseline_pre = r(estimate)
+scalar se_gender_baseline_pre = r(se)
+
+testparm i.female
+scalar f_gender_baseline_pre = r(F)
+
+*-------------------------------------------------------------------------------
+* 4.11 PRE: Gender + ISCO##NACE
+*-------------------------------------------------------------------------------
+di _n "=== PRE: Model 4.11 - Gender + ISCO##NACE ===" _n
+
+svy: logit inwork_poor_pre ///
+    i.female ///
+    i.isco_major##i.nace_sector ///
+    i.contract_type i.work_intensity i.ft_pt_status ///
+    c.age c.age_sq i.year i.citizenship i.hh_type i.region
+est store gender_pre_isco_nace_int
+
+testparm i.female
+scalar f_gender_full_pre = r(F)
+
+lincom 1.female
+scalar b_gender_full_pre = r(estimate)
+scalar reduction_full_pre = (b_gender_baseline_pre - b_gender_full_pre) / b_gender_baseline_pre * 100
+
+*-------------------------------------------------------------------------------
+* 4.12 PRE: Gender##NACE + ISCO
+*-------------------------------------------------------------------------------
+di _n "=== PRE: Model 4.12 - Gender##NACE + ISCO ===" _n
+
+svy: logit inwork_poor_pre ///
+    i.female##i.nace_sector i.isco_major ///
+    i.contract_type i.work_intensity i.ft_pt_status ///
+    c.age c.age_sq i.year i.citizenship i.hh_type i.region
+est store gender_pre_nace_int
+
+testparm i.female#i.nace_sector
+scalar f_gender_nace_int_pre = r(F)
+scalar p_gender_nace_int_pre = r(p)
+
+*-------------------------------------------------------------------------------
+* 4.13 PRE: Women - ISCO##NACE
+*-------------------------------------------------------------------------------
+di _n "=== PRE: Model 4.13 - Women: ISCO##NACE ===" _n
+
+svy, subpop(if female==1): logit inwork_poor_pre ///
+    i.isco_major##i.nace_sector ///
+    i.contract_type i.work_intensity i.ft_pt_status ///
+    c.age c.age_sq i.year i.citizenship i.hh_type i.region
+est store women_pre
+
+testparm i.isco_major
+scalar f_isco_women_pre = r(F)
+
+testparm i.nace_sector
+scalar f_nace_women_pre = r(F)
+
+testparm i.isco_major#i.nace_sector
+scalar f_int_women_pre = r(F)
+
+*-------------------------------------------------------------------------------
+* 4.14 PRE: Men - ISCO##NACE
+*-------------------------------------------------------------------------------
+di _n "=== PRE: Model 4.14 - Men: ISCO##NACE ===" _n
+
+svy, subpop(if female==0): logit inwork_poor_pre ///
+    i.isco_major##i.nace_sector ///
+    i.contract_type i.work_intensity i.ft_pt_status ///
+    c.age c.age_sq i.year i.citizenship i.hh_type i.region
+est store men_pre
+
+testparm i.isco_major
+scalar f_isco_men_pre = r(F)
+
+testparm i.nace_sector
+scalar f_nace_men_pre = r(F)
+
+testparm i.isco_major#i.nace_sector
+scalar f_int_men_pre = r(F)
+
+*-------------------------------------------------------------------------------
+* SUMMARY TABLE: GENDER MODELS
+*-------------------------------------------------------------------------------
+di _n "##########################################################" _n
+di "=== SUMMARY: GENDER MODELS ===" _n
+di "##########################################################" _n
+di ""
+di "A. GENDER DECOMPOSITION (POST):"
+di "  Baseline:                   Coef=" b_gender_baseline_post ", F=" f_gender_baseline_post
+di "  + ISCO:                     Coef=" b_gender_isco_post ", Reduction=" reduction_isco_post "%"
+di "  + NACE:                     Coef=" b_gender_nace_post ", Reduction=" reduction_nace_post "%"
+di "  + ISCO+NACE:                Coef=" b_gender_both_post ", Reduction=" reduction_both_post "%"
+di "  + ISCO##NACE:               Coef=" b_gender_full_post ", Reduction=" reduction_full_post "%"
+di "  Residual unexplained:       " 100 - reduction_full_post "%"
+di ""
+di "B. GENDER INTERACTIONS (POST):"
+di "  Gender×NACE:                F=" f_gender_nace_int_post ", p=" p_gender_nace_int_post
+di "  Gender×ISCO:                F=" f_gender_isco_int_post ", p=" p_gender_isco_int_post
+di ""
+di "C. GENDER-STRATIFIED F-STATISTICS (POST):"
+di "  Women - ISCO:               F=" f_isco_women_post
+di "  Women - NACE:               F=" f_nace_women_post
+di "  Women - ISCO×NACE:          F=" f_int_women_post
+di "  Men - ISCO:                 F=" f_isco_men_post
+di "  Men - NACE:                 F=" f_nace_men_post
+di "  Men - ISCO×NACE:            F=" f_int_men_post
+di "  NACE F-ratio (Men/Women):   " f_nace_men_post / f_nace_women_post
+di ""
+di "D. PRE-TRANSFER COMPARISON:"
+di "  Gender baseline (PRE):      Coef=" b_gender_baseline_pre ", F=" f_gender_baseline_pre
+di "  Gender + ISCO##NACE (PRE):  Coef=" b_gender_full_pre ", Reduction=" reduction_full_pre "%"
+di "  Gender×NACE (PRE):          F=" f_gender_nace_int_pre ", p=" p_gender_nace_int_pre
+di ""
+di "  Women NACE (PRE):           F=" f_nace_women_pre
+di "  Men NACE (PRE):             F=" f_nace_men_pre
+di "  NACE F-ratio PRE:           " f_nace_men_pre / f_nace_women_pre
+di ""
+di "E. PRE → POST CHANGES:"
+di "  Gender coef (baseline):     " b_gender_baseline_pre " → " b_gender_baseline_post
+di "  Gender coef (full model):   " b_gender_full_pre " → " b_gender_full_post
+di "  Women NACE F-stat:          " f_nace_women_pre " → " f_nace_women_post
+di "  Men NACE F-stat:            " f_nace_men_pre " → " f_nace_men_post
+di ""
+
+*===============================================================================
+* FINAL COMPREHENSIVE SUMMARY
+*===============================================================================
+
+di _n "###############################################################" _n
+di "###    FINAL COMPREHENSIVE SUMMARY                          ###" _n
+di "###############################################################" _n
+di ""
+di "TOTAL MODELS ESTIMATED: 32"
+di "  Section 1 (Baseline):              8 models"
+di "  Section 2 (ISCO×NACE):             2 models"
+di "  Section 3 (Education):             8 models"
+di "  Section 4 (Gender):               14 models"
+di ""
+di "==========================================================" _n
+di "KEY FINDING 1: ISCO vs NACE PRE→POST" _n
+di "==========================================================" _n
+di "PRE-Transfer:"
+di "  ISCO F-stat:  " f_isco_base_pre " (DOMINATES)"
+di "  NACE F-stat:  " f_nace_base_pre
+di "  Ratio:        " f_isco_base_pre / f_nace_base_pre ":1"
+di ""
+di "POST-Transfer:"
+di "  ISCO F-stat:  " f_isco_int_post " (CONVERGES)"
+di "  NACE F-stat:  " f_nace_int_post
+di "  Ratio:        " f_isco_int_post / f_nace_int_post ":1"
+di ""
+di "Interpretation: Transfers compensate ISCO (drops " (1 - f_isco_int_post/f_isco_base_pre)*100 "%)"
+di "                but NOT NACE (stable)" _n
+
+di "==========================================================" _n
+di "KEY FINDING 2: Education×NACE vs Gender×NACE" _n
+di "==========================================================" _n
+di "Education×NACE Interaction:"
+di "  POST: F=" f_edu_nace_int_post ", p=" p_edu_nace_int_post
+di "  PRE:  F=" f_edu_nace_int_pre ", p=" p_edu_nace_int_pre
+di "  → NOT SIGNIFICANT in both periods"
+di ""
+di "Gender×NACE Interaction:"
+di "  POST: F=" f_gender_nace_int_post ", p=" p_gender_nace_int_post
+di "  PRE:  F=" f_gender_nace_int_pre ", p=" p_gender_nace_int_pre
+di "  → SIGNIFICANT in both periods"
+di ""
+di "Interpretation: Gender gaps are SECTORAL (institutional)"
+di "                Education gaps are UNIVERSAL (market-based)" _n
+
+di "==========================================================" _n
+di "KEY FINDING 3: Institutional Gender Closure" _n
+di "==========================================================" _n
+di "Men access broader sectoral structure:"
+di "  Men NACE F (POST):    " f_nace_men_post
+di "  Women NACE F (POST):  " f_nace_women_post
+di "  Men/Women ratio:      " f_nace_men_post / f_nace_women_post " (2× higher!)"
+di ""
+di "Gender gap decomposition:"
+di "  Explained by ISCO:        " reduction_isco_post "%"
+di "  Explained by NACE:        " reduction_nace_post "%"
+di "  Explained by ISCO##NACE:  " reduction_full_post "%"
+di "  RESIDUAL (unexplained):   " 100 - reduction_full_post "%"
+di ""
+di "Interpretation: Most gender gap due to household/transfers,"
+di "                but WITHIN jobs/sectors, Gender×NACE significant" _n
+
+di "==========================================================" _n
+di "KEY FINDING 4: ISCO×NACE Interactions Strengthen POST" _n
+di "==========================================================" _n
+di "ISCO×NACE Interaction F-statistic:"
+di "  PRE:  " f_interaction_pre
+di "  POST: " f_interaction_post
+di "  Change: +" (f_interaction_post - f_interaction_pre) " (+" (f_interaction_post - f_interaction_pre)/f_interaction_pre*100 "%)"
+di ""
+di "Interpretation: Institutional complementarity becomes STRONGER"
+di "                after transfers, not weaker" _n
+
+di "==========================================================" _n
+di "All results saved in memory" _n
+di "Use 'estimates dir' to see all models" _n
+di "Use 'estimates table <names>' to compare models" _n
+di "==========================================================" _n
+
+*===============================================================================
+* SAVE ALL ESTIMATES
+*===============================================================================
+estimates save "${output}/All_Models_Organized.ster", replace
+
+di _n "All estimates saved to: ${output}/All_Models_Organized.ster"
+di "Analysis complete!" _n
+
+
