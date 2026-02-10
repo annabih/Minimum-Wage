@@ -1,0 +1,615 @@
+*******************************************************************************************************************************************************************************************
+*** Title: Complete In-Work Poverty Analysis - All Models with Interactions
+*** EU-SILC Austria 2017-2024
+*** Date: 09.02.2026
+*******************************************************************************************************************************************************************************************
+clear all
+set more off
+
+use "D:\Data\AT_CROSS\SILC_CrossSec_AllYears_2015_2024.dta"
+global output "D:\InWorkPoverty_SILC"
+
+local years "2017 2018 2019 2020 2021 2022 2023 2024"
+
+di _n "=== EMPLOYMENT CHARACTERISTICS POVERTY ANALYSIS START ===" _n
+
+*===============================================================================
+* DESTRING VARIABLES
+*===============================================================================
+local numeric_vars "HX090 HY023 HX050 RB050 PB040 RX010 PX010 PL073 PL074 PL075 PL076 year PB150 PL060 PL100 PL051 PL051A PL140 PL141"
+
+foreach var of local numeric_vars {
+    capture confirm variable `var'
+    if _rc == 0 {
+        capture confirm string variable `var'
+        if _rc == 0 {
+            replace `var' = subinstr(`var', ",", ".", .)
+            destring `var', replace force
+        }
+    }
+}
+*===============================================================================
+* VARIABLE PREPARATION
+*===============================================================================
+di _n "=== Preparing variables ===" _n
+
+* Personal weight
+capture confirm variable RB050
+if _rc == 0 {
+    gen dwt = RB050
+}
+else {
+    gen dwt = PB040
+}
+label variable dwt "Personal cross-sectional weight"
+
+* Age
+capture confirm variable RX010
+if _rc == 0 {
+    gen age = RX010
+}
+else {
+    gen age = PX010
+}
+label variable age "Age"
+gen age_sq = age^2
+
+* Sex
+capture confirm variable RB090
+if _rc == 0 {
+    gen sex = RB090
+}
+else {
+    capture confirm variable PB150
+    if _rc == 0 {
+        gen sex = PB150
+    }
+    else {
+        di as error "Sex variable not found (RB090 or PB150)"
+        exit 1
+    }
+}
+label define sex_lbl 1 "Male" 2 "Female"
+label values sex sex_lbl
+label variable sex "Sex"
+
+* Months worked - ALL work (employee + self-employed)
+capture confirm variable PL073
+if _rc == 0 {
+    gen months_ft_emp = PL073
+    replace months_ft_emp = 0 if missing(months_ft_emp)
+}
+else {
+    gen months_ft_emp = 0
+}
+
+capture confirm variable PL074
+if _rc == 0 {
+    gen months_pt_emp = PL074
+    replace months_pt_emp = 0 if missing(months_pt_emp)
+}
+else {
+    gen months_pt_emp = 0
+}
+
+capture confirm variable PL075
+if _rc == 0 {
+    gen months_ft_self = PL075
+    replace months_ft_self = 0 if missing(months_ft_self)
+}
+else {
+    gen months_ft_self = 0
+}
+
+capture confirm variable PL076
+if _rc == 0 {
+    gen months_pt_self = PL076
+    replace months_pt_self = 0 if missing(months_pt_self)
+}
+else {
+    gen months_pt_self = 0
+}
+
+gen months_worked = months_ft_emp + months_pt_emp + months_ft_self + months_pt_self
+replace months_worked = 12 if months_worked > 12 & !missing(months_worked)
+label variable months_worked "Total months worked (employee + self-employed)"
+
+* POST-TRANSFER equivalised disposable income
+gen eq_hh_post = HX090
+label variable eq_hh_post "Equivalised income post transfer (HX090)"
+
+* Drop missing values
+drop if missing(eq_hh_post) | missing(dwt) | missing(age) | missing(sex)
+di _n "Observations after dropping missing: " _N _n
+
+*===============================================================================
+* HOUSEHOLD COMPOSITION - OECD MODIFIED EQUIVALENCE SCALE
+*===============================================================================
+di _n "=== Creating household composition variables ===" _n
+
+* Identify household ID variable
+capture confirm variable id_hh
+if _rc == 0 {
+    gen hh_id = id_hh
+    di "Using id_hh as household identifier"
+}
+else {
+    capture confirm variable HB030
+    if _rc == 0 {
+        gen hh_id = HB030
+        di "Using HB030 as household identifier"
+    }
+    else {
+        capture confirm variable DB030
+        if _rc == 0 {
+            gen hh_id = DB030
+            di "Using DB030 as household identifier"
+        }
+        else {
+            di as error "No household ID found (id_hh, HB030, or DB030)"
+            exit 1
+        }
+    }
+}
+
+* Create household-level counts by year
+bysort year hh_id: egen n_adults = total(age >= 14)
+bysort year hh_id: egen n_children = total(age < 14)
+bysort year hh_id: egen hh_size = count(hh_id)
+
+label variable n_adults "Number of adults (14+) in household"
+label variable n_children "Number of children (<14) in household"
+label variable hh_size "Household size"
+
+*===============================================================================
+* HOUSEHOLD TYPE CLASSIFICATION
+*===============================================================================
+di _n "=== Classifying household types ===" _n
+
+gen hh_type = .
+replace hh_type = 1 if n_adults == 1 & n_children == 0
+replace hh_type = 2 if n_adults == 1 & n_children == 1
+replace hh_type = 3 if n_adults == 1 & n_children >= 2
+replace hh_type = 4 if n_adults == 2 & n_children == 0
+replace hh_type = 5 if n_adults == 2 & n_children == 1
+replace hh_type = 6 if n_adults == 2 & n_children == 2
+replace hh_type = 7 if n_adults == 2 & n_children >= 3
+replace hh_type = 8 if n_adults >= 3 & n_children == 0
+replace hh_type = 9 if n_adults >= 3 & n_children >= 1
+replace hh_type = 10 if missing(hh_type)
+
+label define hh_type_lbl 1 "1 Erwachsener" 2 "1 Erwachsener + 1 Kind" 3 "1 Erwachsener + 2+ Kinder" 4 "2 Erwachsene" 5 "2 Erwachsene + 1 Kind" 6 "2 Erwachsene + 2 Kinder" 7 "2 Erwachsene + 3+ Kinder" 8 "3+ Erwachsene" 9 "3+ Erwachsene mit Kindern" 10 "Sonstige"
+label values hh_type hh_type_lbl
+label variable hh_type "Household type"
+
+tab hh_type, missing
+
+*===============================================================================
+* OECD MODIFIED EQUIVALENCE WEIGHTS
+*===============================================================================
+di _n "=== Calculating OECD modified equivalence weights ===" _n
+
+gen double oecd_w = 1.0 + (n_adults - 1) * 0.5 + n_children * 0.3
+label variable oecd_w "OECD modified equivalence weight"
+
+di _n "Verification of equivalence weights by household type:"
+table hh_type, contents(mean oecd_w min oecd_w max oecd_w) format(%6.2f)
+
+*===============================================================================
+* PRE-TRANSFER EQUIVALISED INCOME
+*===============================================================================
+di _n "=== Creating pre transfer equivalised income ===" _n
+
+gen double eq_hh_pre = HY023 / oecd_w
+label variable eq_hh_pre "Equivalised income pre transfer (HY023 / OECD weight)"
+
+gen double tr_amt = eq_hh_post - eq_hh_pre
+label variable tr_amt "Transfer amount equivalised annual"
+
+*===============================================================================
+* Calculate poverty threshold per year (based on POST-TRANSFER)
+*===============================================================================
+di _n "=== Calculating base poverty thresholds ===" _n
+
+tempfile thresholds
+tempname h
+
+postfile `h' int year double med_post pov60 using `thresholds', replace
+
+foreach yr of local years {
+    quietly count if year==`yr'
+    if r(N)==0 continue
+    quietly _pctile eq_hh_post [pw=dwt] if year==`yr', p(50)
+    local median_val = r(r1)
+    post `h' (`yr') (`median_val') (0.60*`median_val')
+    di "Year `yr' Median=" %12.2f `median_val' " Threshold=" %12.2f (0.60*`median_val')
+}
+
+postclose `h'
+
+merge m:1 year using `thresholds', nogen
+
+replace pov60 = round(pov60, 1)
+label variable med_post "Median eq income post transfer"
+label variable pov60 "Poverty threshold 60% median based on post transfer"
+
+*===============================================================================
+* HOUSEHOLD-TYPE SPECIFIC POVERTY THRESHOLDS
+*===============================================================================
+di _n "=== Calculating household-type specific poverty thresholds ===" _n
+
+capture drop pov_hh
+gen double pov_hh = round(pov60 * oecd_w, 1)
+label variable pov_hh "Poverty threshold household type annual"
+
+capture drop pov_hh_m
+gen double pov_hh_m = round(pov_hh / 12, 1)
+label variable pov_hh_m "Poverty threshold household type monthly"
+
+di _n "Household-type specific thresholds (example for 2023):"
+table hh_type if year == 2023, contents(mean pov_hh mean pov_hh_m) format(%12.0f)
+
+*===============================================================================
+* POVERTY STATUS POST AND PRE
+*===============================================================================
+di _n "=== Generating poverty status post and pre ===" _n
+
+* AROP post
+gen byte arop = .
+replace arop = 1 if eq_hh_post < pov60 & !missing(pov60)
+replace arop = 0 if eq_hh_post >= pov60 & !missing(pov60)
+label variable arop "AROP post transfer"
+
+gen double ar_ga = .
+replace ar_ga = pov60 - eq_hh_post if arop == 1
+label variable ar_ga "AROP gap absolute post"
+
+gen double ar_gr = .
+replace ar_gr = ((pov60 - eq_hh_post) / pov60) * 100 if arop == 1
+label variable ar_gr "AROP gap relative post percent"
+
+* AROP pre
+gen byte arop_pre = .
+replace arop_pre = 1 if eq_hh_pre < pov60 & !missing(pov60)
+replace arop_pre = 0 if eq_hh_pre >= pov60 & !missing(pov60)
+label variable arop_pre "AROP pre transfer"
+
+gen double arpre_ga = .
+replace arpre_ga = pov60 - eq_hh_pre if arop_pre == 1
+label variable arpre_ga "AROP gap absolute pre"
+
+gen double arpre_gr = .
+replace arpre_gr = ((pov60 - eq_hh_pre) / pov60) * 100 if arop_pre == 1
+label variable arpre_gr "AROP gap relative pre percent"
+
+* Lifted out measures
+gen byte lifted = (arop_pre == 1 & arop == 0)
+label variable lifted "Lifted out of poverty by transfers"
+
+gen byte stillpoor = (arop_pre == 1 & arop == 1)
+label variable stillpoor "Still poor after transfers"
+
+gen byte pushed = (arop_pre == 0 & arop == 1)
+label variable pushed "Pushed into poverty"
+
+*===============================================================================
+* AGE GROUPS AND WORKER DEFINITION
+*===============================================================================
+di _n "=== Defining age groups and workers ===" _n
+
+gen age_group = .
+replace age_group = 1 if age < 18
+replace age_group = 2 if age >= 18 & age < 65
+replace age_group = 3 if age >= 65
+label define age_lbl 1 "Children (<18)" 2 "Working age (18-64)" 3 "Elderly (65+)"
+label values age_group age_lbl
+
+gen worker = (months_worked > 6 & age >= 18 & age <= 64)
+label variable worker "Worker (>6 months, age 18-64)"
+
+*-------------------------------------------------------------------------------
+* AGE GROUPS – DECADES (for detailed age effects)
+*-------------------------------------------------------------------------------
+gen age_decade = .
+
+replace age_decade = 1 if age >= 15 & age <= 29
+replace age_decade = 2 if age >= 30 & age <= 39
+replace age_decade = 3 if age >= 40 & age <= 49
+replace age_decade = 4 if age >= 50 & age <= 59
+replace age_decade = 5 if age >= 60 & age <= 65
+replace age_decade = 6 if age >= 65
+
+label define age_decade_lbl 1 "15–29" 2 "30–39" 3 "40–49" 4 "50–59" 5 "60–65" 6 "65+"
+
+label values age_decade age_decade_lbl
+label variable age_decade "Age group (decades)"
+
+
+*===============================================================================
+* IN WORK POVERTY POST AND PRE
+*===============================================================================
+di _n "=== Generating in work poverty status ===" _n
+
+* IWP post
+gen inwork_poor_post = (worker == 1 & arop == 1)
+label variable inwork_poor_post "IWP post transfer"
+
+gen double iw_ga = pov60 - eq_hh_post if inwork_poor_post == 1
+label variable iw_ga "IWP gap absolute post"
+
+gen double iw_gr = ((pov60 - eq_hh_post) / pov60) * 100 if inwork_poor_post == 1
+label variable iw_gr "IWP gap relative post percent"
+
+* IWP pre
+gen inwork_poor_pre = (worker == 1 & arop_pre == 1)
+label variable inwork_poor_pre "IWP pre transfer"
+
+gen double iwpre_ga = pov60 - eq_hh_pre if inwork_poor_pre == 1
+label variable iwpre_ga "IWP gap absolute pre"
+
+gen double iwpre_gr = ((pov60 - eq_hh_pre) / pov60) * 100 if inwork_poor_pre == 1
+label variable iwpre_gr "IWP gap relative pre percent"
+
+gen byte iwlifted = (inwork_poor_pre == 1 & inwork_poor_post == 0)
+label variable iwlifted "Workers lifted out by transfers"
+
+*-------------------------------------------------------------------------------
+* CITIZENSHIP
+*-------------------------------------------------------------------------------
+gen citizenship = .
+gen citizenship_raw = ""
+
+* 2017–2020: PB220A (string)
+replace citizenship_raw = PB220A if inrange(year, 2017, 2020) & !missing(PB220A)
+
+* 2021–2024: RB290 (string)
+replace citizenship_raw = RB290 if inrange(year, 2021, 2024) & !missing(RB290)
+
+* harmonise to numeric categories
+replace citizenship = 1 if citizenship_raw == "LOC"
+replace citizenship = 2 if citizenship_raw == "EU"
+replace citizenship = 3 if citizenship_raw == "OTH"
+replace citizenship = 3 if citizenship_raw == "NO"
+
+* explicit missing category (CRUCIAL for i.citizenship)
+replace citizenship = 9 if missing(citizenship)
+
+label define citizenship_lbl 1 "Local" 2 "EU" 3 "Other" 9 "Missing", replace
+
+label values citizenship citizenship_lbl
+label variable citizenship "Citizenship (harmonised)"
+*-------------------------------------------------------------------------------
+* REGION (NUTS1)
+*-------------------------------------------------------------------------------
+capture confirm variable DB040
+if _rc == 0 {
+    gen region = .
+    replace region = 1 if DB040 == "AT1" 
+    replace region = 2 if DB040 == "AT2" 
+    replace region = 3 if DB040 == "AT3" 
+    
+    label define region_lbl 1 "AT1-Ostösterreich" 2 "AT2-Südösterreich" 3 "AT3-Westösterreich"
+    label values region region_lbl
+}
+
+*-------------------------------------------------------------------------------
+* EDUCATION (ISCED) – harmonised to 5 categories (2017–2024)
+*-------------------------------------------------------------------------------
+capture drop education
+gen education = .
+
+* 2017–2020: PE040 (top-coded at 500)
+* ISCED 0–1
+replace education = 0 if inrange(year,2017,2020) & inlist(PE040, 0,100)
+
+* ISCED 2
+replace education = 1 if inrange(year,2017,2020) & inlist(PE040, 200)
+
+* ISCED 3
+replace education = 2 if inrange(year,2017,2020) & inlist(PE040, 300,340,342,343,344,350,352,353,354)
+
+* ISCED 4
+replace education = 3 if inrange(year,2017,2020) & inlist(PE040,400,440,450)
+
+* ISCED 5+ (top-coded)
+replace education = 4 if inrange(year,2017,2020) & PE040 >= 500
+
+
+* 2021–2024: PE041 (fully detailed ISCED)
+* ISCED 0–1
+replace education = 0 if inrange(year,2021,2024) & inlist(PE041, 0,1,100)
+
+* ISCED 2
+replace education = 1 if inrange(year,2021,2024) & inlist(PE041, 2,200)
+
+* ISCED 3
+replace education = 2 if inrange(year,2021,2024) & inlist(PE041, 3,300,340,342,343,344,349,350,352,353,354,359,390,392,393,394,399)
+
+* ISCED 4
+replace education = 3 if inrange(year,2021,2024) & inlist(PE041, 4,400,440,450,490)
+
+* ISCED 5+ (tertiary)
+replace education = 4 if inrange(year,2021,2024) & inlist(PE041, 5,500,550,600,700,800)
+
+label define education_lbl 0 "ISCED 0–1: Low" 1 "ISCED 2: Lower secondary" 2 "ISCED 3: Upper secondary" 3 "ISCED 4: Post-secondary non-tertiary"4 "ISCED 5+: Tertiary", replace
+label values education education_lbl
+label variable education "Education (ISCED, 5-category harmonised)"
+
+*-------------------------------------------------------------------------------
+* OCCUPATION (ISCO)
+*-------------------------------------------------------------------------------
+
+foreach v of varlist PL051 PL051A {
+    capture confirm variable `v'
+    if _rc == 0 replace `v' = . if `v' < 0
+}
+
+gen isco_major = .
+    replace isco_major = PL051  if inrange(year, 2017, 2020) & !missing(PL051)
+    replace isco_major = PL051A if inrange(year, 2021, 2024) & !missing(PL051A)
+    replace isco_major = 1 if inrange(isco_major,0, 3)
+    replace isco_major = 1 if isco_major == 10
+
+label define isco_major 1 "Armed Forces" 4 "Clerical support workers" 5 "Services and sales workers" 6 "Skilled agricultural and fishery workers" 7 "Craft and related trades workers" 8 "Plant and machine operators and assemblers" 9 "Elementary occupations" 11 "Chief executives, senior officials" 12 "Administrative managers" 13 "Production/specialised managers" 14 "Hospitality/retail managers" 21 "Science/engineering professionals" 22 "Health professionals" 23 "Teaching professionals" 24 "Business/admin professionals" 25 "ICT professionals" 26 "Legal/social/cultural professionals" 31 "Science/engineering associates" 32 "Health associates" 33 "Business/admin associates" 34 "Legal/social/cultural associates" 35 "ICT technicians" 41 "General/keyboard clerks" 42 "Customer service clerks" 43 "Numerical/material clerks" 44 "Other clerical workers" 51 "Personal service workers" 52 "Sales workers" 53 "Personal care workers" 54 "Protective service workers" 61 "Agricultural workers" 62 "Forestry/fishery workers" 71 "Building trades workers" 72 "Metal/machinery workers" 73 "Handicraft/printing workers" 74 "Electrical trades workers" 75 "Food/wood/garment workers" 81 "Plant/machine operators" 82 "Assemblers" 83 "Drivers/mobile operators" 91 "Cleaners/helpers" 92 "Agricultural labourers" 93 "Mining/construction/manufacturing labourers" 94 "Food preparation assistants" 95 "Street sales/service workers" 96 "Refuse/other elementary workers"
+
+label values isco_major isco_major
+label variable isco_major "Occupation ISCO-08 2-digit (harmonised 2017-2024)"
+
+*-------------------------------------------------------------------------------
+* SKILL LEVEL (ISCO)
+*-------------------------------------------------------------------------------
+gen skill_level = .
+
+* High-skilled (Skill Level 4)
+replace skill_level = 4 if inlist(isco_major, 11, 12, 13)      
+replace skill_level = 4 if inrange(isco_major, 21, 26)           
+
+* Skilled (Skill Level 3)
+replace skill_level = 3 if isco_major == 14                       
+replace skill_level = 3 if inrange(isco_major, 31, 35)         
+
+* Medium-skilled (Skill Level 2)
+replace skill_level = 2 if inrange(isco_major, 41, 44)      
+replace skill_level = 2 if inrange(isco_major, 51, 54)     
+replace skill_level = 2 if inrange(isco_major, 61, 63)      
+replace skill_level = 2 if inrange(isco_major, 71, 75)
+replace skill_level = 2 if inrange(isco_major, 81, 83)      
+
+* Elementary (Skill Level 1)
+replace skill_level = 1 if inrange(isco_major, 91, 96)            
+
+* Armed forces (keine eindeutige Zuweisung → missing)
+replace skill_level = . if inlist(isco_major, 0, 1, 2, 3, 10)
+
+* Labels
+label define skill_level 1 "Skill level 1: Elementary" 2 "Skill level 2: Medium-skilled" 3 "Skill level 3: Skilled" 4 "Skill level 4: High-skilled"
+
+label values skill_level skill_level
+label variable skill_level "ISCO-08 Skill Level (based on isco_major 2-digit)"
+
+*-------------------------------------------------------------------------------
+* ECONOMIC ACTIVITY (NACE)
+*-------------------------------------------------------------------------------
+gen nace_sector = .
+
+capture confirm variable PL111
+if _rc == 0 {
+    capture confirm string variable PL111
+    if _rc == 0 {
+        replace nace_sector = 1 if PL111 == "a" & inrange(year, 2017, 2020)
+        replace nace_sector = 2 if PL111 == "b - e" & inrange(year, 2017, 2020)
+        replace nace_sector = 3 if PL111 == "f" & inrange(year, 2017, 2020)
+        replace nace_sector = 4 if PL111 == "g" & inrange(year, 2017, 2020)
+        replace nace_sector = 5 if PL111 == "h" & inrange(year, 2017, 2020)
+        replace nace_sector = 6 if PL111 == "i" & inrange(year, 2017, 2020)
+        replace nace_sector = 7 if PL111 == "j" & inrange(year, 2017, 2020)
+        replace nace_sector = 8 if PL111 == "k" & inrange(year, 2017, 2020)
+        replace nace_sector = 9 if PL111 == "l - n" & inrange(year, 2017, 2020)
+        replace nace_sector = 10 if PL111 == "o" & inrange(year, 2017, 2020)
+        replace nace_sector = 11 if PL111 == "p" & inrange(year, 2017, 2020)
+        replace nace_sector = 12 if PL111 == "q" & inrange(year, 2017, 2020)
+        replace nace_sector = 13 if PL111 == "r - u" & inrange(year, 2017, 2020)
+    }
+}
+
+capture confirm variable PL111A
+if _rc == 0 {
+    capture confirm string variable PL111A
+    if _rc == 0 {
+        replace nace_sector = 1 if PL111A == "a" & inrange(year, 2021, 2024)
+        replace nace_sector = 2 if PL111A == "b - e" & inrange(year, 2021, 2024)
+        replace nace_sector = 3 if PL111A == "f" & inrange(year, 2021, 2024)
+        replace nace_sector = 4 if PL111A == "g" & inrange(year, 2021, 2024)
+        replace nace_sector = 5 if PL111A == "h" & inrange(year, 2021, 2024)
+        replace nace_sector = 6 if PL111A == "i" & inrange(year, 2021, 2024)
+        replace nace_sector = 7 if PL111A == "j" & inrange(year, 2021, 2024)
+        replace nace_sector = 8 if PL111A == "k" & inrange(year, 2021, 2024)
+        replace nace_sector = 9 if PL111A == "l - n" & inrange(year, 2021, 2024)
+        replace nace_sector = 10 if PL111A == "o" & inrange(year, 2021, 2024)
+        replace nace_sector = 11 if PL111A == "p" & inrange(year, 2021, 2024)
+        replace nace_sector = 12 if PL111A == "q" & inrange(year, 2021, 2024)
+        replace nace_sector = 13 if PL111A == "r - u" & inrange(year, 2021, 2024)
+    }
+}
+
+label define nace_lbl 1 "A: Agriculture" 2 "B-E: Industry" 3 "F: Construction" 4 "G: Trade" 5 "H: Transport" 6 "I: Accommodation/Food" 7 "J: ICT" 8 "K: Finance" 9 "L-N: Business Services" 10 "O: Public Admin" 11 "P: Education" 12 "Q: Health/Social" 13 "R-U: Other Services"
+label values nace_sector nace_lbl
+
+*-------------------------------------------------------------------------------
+* 1.12 CONTRACT TYPE
+*-------------------------------------------------------------------------------
+di "Creating contract type variable..."
+
+gen contract_type = .
+replace contract_type = 1 if PL140 == 1 & year < 2020  
+replace contract_type = 2 if PL140 == 2 & year < 2020  
+replace contract_type = 1 if inlist(PL141, 21, 22) & year >= 2020  
+replace contract_type = 2 if inlist(PL141, 11, 12) & year >= 2020  
+
+label define contract_lbl 1 "Permanent" 2 "Temporary/Fixed-term"
+label values contract_type contract_lbl
+
+*-------------------------------------------------------------------------------
+* 1.13 WORK INTENSITY
+*-------------------------------------------------------------------------------
+gen hours_main = PL060 if !missing(PL060)
+gen hours_add = PL100 if !missing(PL100)
+replace hours_add = 0 if missing(hours_add)
+gen hours_total = hours_main + hours_add if !missing(hours_main)
+
+gen months_ft = PL073 if !missing(PL073)
+replace months_ft = 0 if missing(months_ft)
+gen months_pt = PL074 if !missing(PL074)
+replace months_pt = 0 if missing(months_pt)
+
+gen work_intensity = .
+replace work_intensity = 1 if hours_main >= 0  & hours_main < 5
+replace work_intensity = 2 if hours_main >= 5  & hours_main < 10
+replace work_intensity = 3 if hours_main >= 10 & hours_main < 15
+replace work_intensity = 4 if hours_main >= 15 & hours_main < 20
+replace work_intensity = 5 if hours_main >= 20 & hours_main < 25
+replace work_intensity = 6 if hours_main >= 25 & hours_main < 30
+replace work_intensity = 7 if hours_main >= 30 & hours_main < 35
+replace work_intensity = 8 if hours_main >= 35 & hours_main < 40
+replace work_intensity = 9 if hours_main >= 40 & hours_main < 45
+replace work_intensity = 10 if hours_main >= 45 & !missing(hours_main)
+
+label define intensity_lbl 1 "0–4h" 2 "5–9h" 3 "10–14h" 4 "15–19h" 5 "20–24h" 6 "25–29h" 7 "30–34h" 8 "35–39h" 9 "40–44h" 10 "45h+"
+label values work_intensity intensity_lbl
+
+*-------------------------------------------------------------------------------
+* 1.14 FT/PT STATUS
+*-------------------------------------------------------------------------------
+gen ft_pt_status = .
+replace ft_pt_status = 1 if months_ft > months_pt & months_ft > 0  
+replace ft_pt_status = 2 if months_pt > months_ft & months_pt > 0  
+replace ft_pt_status = 3 if months_ft == months_pt & months_ft > 0 
+replace ft_pt_status = 4 if months_ft == 0 & months_pt == 0 & worker == 1 
+
+label define ftpt_lbl 1 "Predominantly FT" 2 "Predominantly PT" 3 "Mixed FT/PT" 4 "Self-empl/Other"
+label values ft_pt_status ftpt_lbl
+
+*===============================================================================
+* SET SURVEY DESIGN
+*===============================================================================
+est clear
+svyset DB060 [pweight = dwt]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
