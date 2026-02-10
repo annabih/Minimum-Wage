@@ -615,7 +615,7 @@ di "###############################################################" _n
 di _n "=== PRE: Model 1.1 - SKILL LEVEL ===" _n
 
 svy: logistic inwork_poor_pre i.skill_level i.contract_type i.work_intensity i.ft_pt_status c.age_sq i.age_decade i.year i.citizenship i.hh_type i.region i.sex i.education
-est store base_pre_isco
+est store base_skill_pre
 
 testparm i.skill_level
 scalar f_isco_base_pre = r(F)
@@ -626,7 +626,7 @@ scalar p_isco_base_pre = r(p)
 di _n "=== POST: Model 1.6 - SKILL LEVEL ===" _n
 
 svy: logistic inwork_poor_post i.skill_level i.contract_type i.work_intensity i.ft_pt_status c.age_sq i.age_decade i.year i.citizenship i.hh_type i.region i.sex i.education
-est store base_pre_isco
+est store base_skill_post
 
 testparm i.skill_level
 scalar f_isco_base_post = r(F)
@@ -640,7 +640,7 @@ scalar p_isco_base_post = r(p)
 di _n "=== PRE: Model 2.1 - SECTOR ===" _n
 
 svy: logistic inwork_poor_pre i.nace_sector i.contract_type i.work_intensity i.ft_pt_status c.age_sq i.age_decade i.year i.citizenship i.hh_type i.region i.sex i.education
-est store base_pre_nace
+est store base_sector_pre
 
 testparm i.nace_sector
 scalar f_nace_base_pre = r(F)
@@ -652,7 +652,7 @@ scalar p_nace_base_pre = r(p)
 di _n "=== POST: Model 2.2 - SECTOR ===" _n
 
 svy: logistic inwork_poor_post i.nace_sector i.contract_type i.work_intensity i.ft_pt_status c.age_sq i.age_decade i.year i.citizenship i.hh_type i.region i.sex i.education
-est store base_post_nace
+est store base_sector_post
 
 testparm i.nace_sector
 scalar f_nace_base_post = r(F)
@@ -666,7 +666,7 @@ scalar p_nace_base_post = r(p)
 di _n "=== PRE: Model 3.1 - SKILL LEVEL + SECTOR (additive) ===" _n
 
 svy: logistic inwork_poor_pre i.skill_level i.nace_sector i.contract_type i.work_intensity i.ft_pt_status c.age_sq i.age_decade i.year i.citizenship i.hh_type i.region i.sex i.education
-est store base_pre_isco_nace
+est store add_skill_sec_pre
 
 testparm i.skill_level
 scalar f_isco_add_pre = r(F)
@@ -679,7 +679,7 @@ scalar f_nace_add_pre = r(F)
 di _n "=== POST: Model 3.2 - SKILL LEVEL + SECTOR (additive) ===" _n
 
 svy: logistic inwork_poor_post i.skill_level i.nace_sector i.contract_type i.work_intensity i.ft_pt_status c.age_sq i.age_decade i.year i.citizenship i.hh_type i.region i.sex i.education
-est store base_post_isco_nace
+est store add_skill_sec_post
 
 testparm i.i.skill_level
 scalar f_isco_add_post = r(F)
@@ -692,7 +692,7 @@ di "###    SECTION 2: OCCUPATION × SECTOR INTERACTIONS         ###" _n
 di "###############################################################" _n
 
 *-------------------------------------------------------------------------------
-* 2.1 PRE: SKILL LEVEL ## NACE - Interaction
+* 4.1 PRE: SKILL LEVEL ## NACE - Interaction
 *-------------------------------------------------------------------------------
 di _n "=== PRE: Model 2.1 - SKILL LEVEL ## NACE - Interaction ===" _n
 
@@ -711,7 +711,7 @@ scalar f_interaction_pre = r(F)
 scalar p_interaction_pre = r(p)
 
 
-* 2.2 POST: ISCO##NACE Full Interaction
+* 4.2 POST: ISCO##NACE Full Interaction
 *-------------------------------------------------------------------------------
 di _n "=== POST: Model 2.2 - SKILL LEVEL ## NACE - Interaction ===" _n
 
@@ -725,22 +725,22 @@ scalar f_isco_int_post = r(F)
 testparm i.nace_sector
 scalar f_nace_int_post = r(F)
 
-testparm i.skill_levelr#i.nace_sector
+testparm i.skill_level#i.nace_sector
 scalar f_interaction_post = r(F)
 scalar p_interaction_post = r(p)
 
 
 ********************************************************************************
-* 2.3 DEEP DIVE INTERACTION EFFECTS
+* 4.3 DEEP DIVE INTERACTION EFFECTS
 ********************************************************************************
-* 2.3.1 Margins - PRE
+* 4.3.1 Margins - PRE
 *-------------------------------------------------------------------------------
 est restore inter_skill_sector_pre
 margins skill_level#nace_sector
 
 marginsplot, x(nace_sector) by(skill_level) title("Predicted Probability of In-Work Poverty") ytitle("Pr(In-Work Poor)") xtitle("") xlabel(, angle(45))
 
-* 2.3.2 Margins - POST
+* 4.3.2 Margins - POST
 *-------------------------------------------------------------------------------
 est restore inter_skill_sector_post
 margins skill_level#nace_sector
@@ -748,7 +748,7 @@ margins skill_level#nace_sector
 marginsplot, x(nace_sector) by(skill_level) title("Predicted Probability of In-Work Poverty") ytitle("Pr(In-Work Poor)") xtitle("") xlabel(, angle(45))
 
 
-* 2.3.3 Sperat Modell by Sector - PRE
+* 4.3.3 Sperat Modell by Sector - PRE
 *-------------------------------------------------------------------------------
 levelsof nace_sector, local(sectors)
 
@@ -762,7 +762,7 @@ ssc install estout, replace
 esttab sector_*, keep(2.skill_level 3.skill_level 4.skill_level) eform ci stats(N) title("Skill-Level nach Sektor")
 
 
-* 2.3.4 Sperat Modell by Sector - POST
+* 4.3.4 Sperat Modell by Sector - POST
 *-------------------------------------------------------------------------------
 levelsof nace_sector, local(sectors)
 
@@ -776,7 +776,7 @@ ssc install estout, replace
 esttab sector_*, keep(2.skill_level 3.skill_level 4.skill_level) eform ci stats(N) title("Skill-Level nach Sektor")
 
 
-* 2.3.5 Sperat Modell by Skill Level - PRE
+* 4.3.5 Sperat Modell by Skill Level - PRE
 *-------------------------------------------------------------------------------
 levelsof skill_level, local(skills)
 
@@ -790,7 +790,7 @@ ssc install estout, replace
 esttab skill_*, keep(2.nace_sector 3.nace_sector 4.nace_sector 5.nace_sector 6.nace_sector 7.nace_sector 8.nace_sector 9.nace_sector 10.nace_sector 11.nace_sector 12.nace_sector 13.nace_sector) eform ci stats(N) title("Sektor-Effekte nach Skill-Level")
 
 
-* 2.3.6 Sperat Modell by Skill Level - POST
+* 4.3.6 Sperat Modell by Skill Level - POST
 *-------------------------------------------------------------------------------
 levelsof skill_level, local(skills)
 
