@@ -593,7 +593,8 @@ label values ft_pt_status ftpt_lbl
 * SET SURVEY DESIGN
 *===============================================================================
 est clear
-svyset DB060 [pweight = dwt]
+egen psu = group(year DB060)
+svyset psu [pweight = dwt]
 
 
 
