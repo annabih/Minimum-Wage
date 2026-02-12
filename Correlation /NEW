@@ -9,6 +9,8 @@ set more off
 use "D:\Data\AT_CROSS\SILC_CrossSec_AllYears_2015_2024.dta"
 global output "D:\InWorkPoverty_SILC"
 
+drop if year == 2015 | year == 2016
+
 local years "2017 2018 2019 2020 2021 2022 2023 2024"
 
 di _n "=== EMPLOYMENT CHARACTERISTICS POVERTY ANALYSIS START ===" _n
@@ -592,25 +594,383 @@ label values ft_pt_status ftpt_lbl
 *===============================================================================
 * SET SURVEY DESIGN
 *===============================================================================
+gen sample_complete = !missing(skill_level) & !missing(nace_sector) & !missing(inwork_poor_pre)
+
 est clear
-egen psu = group(year DB060)
-svyset psu [pweight = dwt]
+svyset hh_id [pweight = dwt]
+
+* 1 Agricultur low n high IWP - 2 Industry high n medium IWP
+fvset base 2 nace_sector 
+
+********************************************************************************
+* ANALYSIS
+********************************************************************************
+*===============================================================================
+* I. DESCRIPTIVE ANALYSIS
+*===============================================================================
+*===============================================================================
+* DESCRIPTIVE ANALYSIS – TEXT OUTPUT
+*===============================================================================
+
+log close _all
+log using "$output/Descriptive_Tables.txt", text replace
+
+* Table 1: Sample Characteristics
+*-------------------------------------------------------------------------------
+* Continuous variables
+svy: mean age months_worked if worker==1
+estat sd
+
+* Categorical variables
+svy: proportion sex if worker==1
+svy: proportion hh_type if worker==1
+svy: proportion contract_type if worker==1
+svy: proportion ft_pt_status if worker==1
+svy: proportion skill_level if worker==1
+svy: proportion nace_sector if worker==1
+
+* Alternative: All in one table with estpost/esttab
+estpost summarize age months_worked if worker==1 [aw=dwt]
+esttab using "$output/Table1_Sample_Characteristics.txt", cells("mean sd min max") noobs replace
+
+* For categorical variables
+estpost tabulate sex if worker==1 [aw=dwt]
+estpost tabulate hh_type if worker==1 [aw=dwt]
+estpost tabulate contract_type if worker==1 [aw=dwt]
+estpost tabulate ft_pt_status if worker==1 [aw=dwt]
 
 
+* Table 2: IWP Incidence Over Time
+*-------------------------------------------------------------------------------
+* Pre-transfer IWP rates by year
+svy: proportion inwork_poor_pre, over(year)
+matrix pre_rates = e(b)
+
+* Post-transfer IWP rates by year
+svy: proportion inwork_poor_post, over(year)
+matrix post_rates = e(b)
+
+* Alternative: tabulate approach
+levelsof year, local(years)
+tempname memhold
+tempfile results
+postfile `memhold' int(year) float(iwp_pre iwp_post reduction_pct) using `results'
+
+foreach y of local years {
+    quietly svy: mean inwork_poor_pre if year==`y' & worker==1
+    local pre = _b[inwork_poor_pre] * 100
+    
+    quietly svy: mean inwork_poor_post if year==`y' & worker==1
+    local post = _b[inwork_poor_post] * 100
+    
+    local reduction = ((`pre' - `post') / `pre') * 100
+    
+    post `memhold' (`y') (`pre') (`post') (`reduction')
+}
+postclose `memhold'
+
+preserve
+use `results', clear
+list
+export delimited using "$output/Table2_IWP_Over_Time.txt", replace
+restore
 
 
+* Table 3: IWP Rates by Employment Characteristics
+*-------------------------------------------------------------------------------
+di _n "=== Table 3: IWP Rates by Employment Characteristics ===" _n
+
+* Overall IWP rates
+svy: mean inwork_poor_pre inwork_poor_post if worker==1
+
+* By skill level
+svy: mean inwork_poor_pre inwork_poor_post, over(skill_level)
+
+* By sector
+svy: mean inwork_poor_pre inwork_poor_post, over(nace_sector)
+
+* By contract type
+svy: mean inwork_poor_pre inwork_poor_post, over(contract_type)
+
+* By FT/PT status
+svy: mean inwork_poor_pre inwork_poor_post, over(ft_pt_status)
+
+* By gender
+svy: mean inwork_poor_pre inwork_poor_post, over(sex)
+
+* Export comprehensive table
+tempname memhold2
+tempfile results2
+postfile `memhold2' str50(characteristic) str50(category) float(iwp_pre iwp_post n_workers) using `results2'
+
+* Overall
+quietly svy: mean inwork_poor_pre if worker==1
+local pre = _b[inwork_poor_pre] * 100
+quietly svy: mean inwork_poor_post if worker==1
+local post = _b[inwork_poor_post] * 100
+quietly count if worker==1 & e(sample)
+local n = r(N)
+post `memhold2' ("Overall") ("All workers") (`pre') (`post') (`n')
+
+* By skill level
+forvalues s = 1/4 {
+    quietly svy: mean inwork_poor_pre if skill_level==`s' & worker==1
+    local pre = _b[inwork_poor_pre] * 100
+    quietly svy: mean inwork_poor_post if skill_level==`s' & worker==1
+    local post = _b[inwork_poor_post] * 100
+    quietly count if skill_level==`s' & worker==1 & !missing(inwork_poor_pre)
+    local n = r(N)
+    local lbl : label skill_level `s'
+    post `memhold2' ("Skill Level") ("`lbl'") (`pre') (`post') (`n')
+}
+
+* By sector
+forvalues sec = 1/13 {
+    quietly svy: mean inwork_poor_pre if nace_sector==`sec' & worker==1
+    if _rc == 0 {
+        local pre = _b[inwork_poor_pre] * 100
+        quietly svy: mean inwork_poor_post if nace_sector==`sec' & worker==1
+        local post = _b[inwork_poor_post] * 100
+        quietly count if nace_sector==`sec' & worker==1 & !missing(inwork_poor_pre)
+        local n = r(N)
+        local lbl : label nace_sector `sec'
+        post `memhold2' ("Sector") ("`lbl'") (`pre') (`post') (`n')
+    }
+}
+
+* By contract type
+forvalues c = 1/2 {
+    quietly svy: mean inwork_poor_pre if contract_type==`c' & worker==1
+    if _rc == 0 {
+        local pre = _b[inwork_poor_pre] * 100
+        quietly svy: mean inwork_poor_post if contract_type==`c' & worker==1
+        local post = _b[inwork_poor_post] * 100
+        quietly count if contract_type==`c' & worker==1 & !missing(inwork_poor_pre)
+        local n = r(N)
+        local lbl : label contract_type `c'
+        post `memhold2' ("Contract Type") ("`lbl'") (`pre') (`post') (`n')
+    }
+}
+
+* By FT/PT
+forvalues f = 1/4 {
+    quietly svy: mean inwork_poor_pre if ft_pt_status==`f' & worker==1
+    if _rc == 0 {
+        local pre = _b[inwork_poor_pre] * 100
+        quietly svy: mean inwork_poor_post if ft_pt_status==`f' & worker==1
+        local post = _b[inwork_poor_post] * 100
+        quietly count if ft_pt_status==`f' & worker==1 & !missing(inwork_poor_pre)
+        local n = r(N)
+        local lbl : label ft_pt_status `f'
+        post `memhold2' ("FT/PT Status") ("`lbl'") (`pre') (`post') (`n')
+    }
+}
+
+* By gender
+forvalues g = 1/2 {
+    quietly svy: mean inwork_poor_pre if sex==`g' & worker==1
+    local pre = _b[inwork_poor_pre] * 100
+    quietly svy: mean inwork_poor_post if sex==`g' & worker==1
+    local post = _b[inwork_poor_post] * 100
+    quietly count if sex==`g' & worker==1 & !missing(inwork_poor_pre)
+    local n = r(N)
+    local lbl : label sex `g'
+    post `memhold2' ("Gender") ("`lbl'") (`pre') (`post') (`n')
+}
+
+postclose `memhold2'
+
+preserve
+use `results2', clear
+export delimited using "$output/Table3_IWP_by_Characteristics.txt", replace
+restore
 
 
+* Table 4: Skill Level Distribution by Economic Sector
+*-------------------------------------------------------------------------------
+di _n "=== Table 4: Skill Level Distribution by Economic Sector ===" _n
+
+levelsof year, local(yrs)
+
+foreach y of local yrs {
+    di _n "=== Year `y' ==="
+    svy, subpop(if year==`y'): tabulate nace_sector skill_level, row
+}
+
+* Pooled across all years
+svy: tabulate nace_sector skill_level, row
 
 
+* Table 5: Contract Type and Work Intensity by Sector
+*-------------------------------------------------------------------------------
+di _n "=== Table 5: Contract Type and Work Intensity by Sector ===" _n
+
+* Contract type by sector
+svy: tabulate nace_sector contract_type, row
+
+* FT/PT status by sector
+svy: tabulate nace_sector ft_pt_status, row
+
+* Export to table
+tempname memhold3
+tempfile results3
+postfile `memhold3' str50(sector) float(pct_temporary pct_parttime n_workers) using `results3'
+
+forvalues sec = 1/13 {
+    * Percent temporary
+    quietly svy: mean contract_type if nace_sector==`sec' & worker==1 & !missing(contract_type)
+    if _rc == 0 {
+        local temp = (_b[contract_type] - 1) * 100  // contract_type: 1=perm, 2=temp, so mean-1 gives % temporary
+    }
+    else {
+        local temp = .
+    }
+    
+    * Percent part-time (combining categories 2, 3)
+    quietly count if nace_sector==`sec' & inlist(ft_pt_status, 2, 3) & worker==1 & !missing(ft_pt_status)
+    local pt = r(N)
+    quietly count if nace_sector==`sec' & worker==1 & !missing(ft_pt_status)
+    local tot = r(N)
+    if `tot' > 0 {
+        local pct_pt = (`pt' / `tot') * 100
+    }
+    else {
+        local pct_pt = .
+    }
+    
+    local lbl : label nace_sector `sec'
+    post `memhold3' ("`lbl'") (`temp') (`pct_pt') (`tot')
+}
+
+postclose `memhold3'
+
+preserve
+use `results3', clear
+export delimited using "$output/Table5_Contract_WorkIntensity_by_Sector.txt", replace
+restore
 
 
+* Table 6: IWP Rates by Household Type and Employment Status
+*-------------------------------------------------------------------------------
+di _n "=== Table 6: IWP Rates by Household Type and Employment Status ===" _n
+
+* Cross-tabulation
+svy: tabulate hh_type ft_pt_status if worker==1, row
+
+* IWP rates by household type and FT/PT status
+forvalues h = 1/9 {
+    di _n "=== Household Type `h' ==="
+    svy: mean inwork_poor_pre inwork_poor_post if hh_type==`h' & worker==1, over(ft_pt_status)
+}
+
+* Export detailed table
+tempname memhold4
+tempfile results4
+postfile `memhold4' str50(hh_type_lbl) str30(employment_status) float(iwp_pre iwp_post n_workers) using `results4'
+
+forvalues h = 1/9 {
+    forvalues f = 1/4 {
+        quietly svy: mean inwork_poor_pre if hh_type==`h' & ft_pt_status==`f' & worker==1
+        if _rc == 0 {
+            local pre = _b[inwork_poor_pre] * 100
+            quietly svy: mean inwork_poor_post if hh_type==`h' & ft_pt_status==`f' & worker==1
+            local post = _b[inwork_poor_post] * 100
+            quietly count if hh_type==`h' & ft_pt_status==`f' & worker==1 & !missing(inwork_poor_pre)
+            local n = r(N)
+            
+            local hh_lbl : label hh_type `h'
+            local ft_lbl : label ft_pt_status `f'
+            
+            post `memhold4' ("`hh_lbl'") ("`ft_lbl'") (`pre') (`post') (`n')
+        }
+    }
+}
+
+postclose `memhold4'
+
+preserve
+use `results4', clear
+export delimited using "$output/Table6_IWP_by_HHtype_Employment.txt", replace
+restore
 
 
+* Table 7: Summary Statistics for Key Variables (Alternative to Table 1)
+*-------------------------------------------------------------------------------
+di _n "=== Table 7: Summary Statistics for Workers ===" _n
+
+* Comprehensive summary table
+estpost summarize age months_worked eq_hh_pre eq_hh_post pov60 if worker==1 [aw=dwt], detail
+esttab using "$output/Table7_Summary_Statistics.txt", cells("mean sd p25 p50 p75 min max") noobs replace
+
+log close
+
+********************************************************************************
+* MULTIVARIAT ANALYSIS
+********************************************************************************
+*===============================================================================
+* LOG REG - PRE
+*===============================================================================
+* 1. SKILL LEVEL
+*-------------------------------------------------------------------------------
+svy, subpop(sample_complete): logistic inwork_poor_pre i.skill_level i.year
+est store skill_pre
+
+* 2. SECTOR 
+*-------------------------------------------------------------------------------
+svy, subpop(sample_complete): logistic inwork_poor_pre i.nace_sector i.year
+est store sector_pre
+
+* 3. SKILL LEVEL + SECTOR
+*-------------------------------------------------------------------------------
+svy, subpop(sample_complete): logistic inwork_poor_pre i.skill_level i.nace_sector i.year
+est store skill_sector_con_pre
+
+* 4. SECTOR # SKILL LEVEL
+*-------------------------------------------------------------------------------
+svy, subpop(sample_complete): logistic inwork_poor_pre i.nace_sector##i.skill_level i.year
+est store skill_inter_sector_pre
 
 
+*===============================================================================
+* LOG REG - POST
+*===============================================================================
+* 1. SKILL LEVEL
+*-------------------------------------------------------------------------------
+svy, subpop(sample_complete): logistic inwork_poor_post i.skill_level i.year
+est store skill_post
+
+* 2. SECTOR 
+*-------------------------------------------------------------------------------
+svy, subpop(sample_complete): logistic inwork_poor_post i.nace_sector i.year
+est store sector_post
+
+* 3. SKILL LEVEL + SECTOR 
+*-------------------------------------------------------------------------------
+svy, subpop(sample_complete): logistic inwork_poor_post i.skill_level i.nace_sector i.year
+est store skill_sector_cat_post
+
+* 4. SECTOR # SKILL LEVEL
+*-------------------------------------------------------------------------------
+svy, subpop(sample_complete): logistic inwork_poor_post i.nace_sector##i.skill_level i.year
+est store skill_inter_sector_post
 
 
+*===============================================================================
+* R
+*===============================================================================
+* Vergleiche die F-Statistiken der Hauptmodelle:
+est replay skill_pre 
+est replay sector_pre
+est replay skill_sector_con_pre
+
+* Durchschnittliche Margins Vergleichen 
+est restore skill_sector_con_pre
+margins, dydx(skill_level) atmeans
+margins, dydx(nace_sector) atmeans
+
+* Predicted Probabilities für typische Profile
+margins, at(skill_level=(1 2 3 4) nace_sector=1)
+marginsplot
 
 
 
