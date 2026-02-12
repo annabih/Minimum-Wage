@@ -1,7 +1,7 @@
-/*******************************************************************************************************************************************************************************************
+*******************************************************************************************************************************************************************************************
 *** Titel: Combined Poverty Analysis with Household Decomposition - EU-SILC Austria 2015-2024 - Pre/Post Transfer Extended
 *** Date: 04.02.2026
-*** Aim: Combined AROP and IWP calculation with sex and household-type specific analysis - Pre and Post Transfer with AROP without IWP
+*** Aim: Combined AROP and IWP calculation with sex and household-type specific analysis - Pre and Post Transfer with AROP without IWP and IWP Employees (LES==3)
 *** Method: Uses standard and household-type specific poverty thresholds based on OECD equivalence weights
 *******************************************************************************************************************************************************************************************
 clear all
@@ -19,7 +19,7 @@ di _n "=== Original observations: " _N " ===" _n
 *===============================================================================
 di _n "=== Destringing variables ===" _n
 
-local numeric_vars "HX090 HY023 RB050 PB040 RX010 PX010 PL073 PL074 PL075 PL076 year HX040 HX050 RB090 PB150"
+local numeric_vars "HX090 HY023 RB050 PB040 RX010 PX010 PL073 PL074 PL075 PL076 year HX040 HX050 RB090 PB150 PL031"
 
 foreach var of local numeric_vars {
     capture confirm variable `var'
@@ -83,6 +83,19 @@ else {
 label define sex_lbl 1 "Male" 2 "Female"
 label values sex sex_lbl
 label variable sex "Sex"
+
+* Labour Economic Status (LES) - PL031
+capture confirm variable PL031
+if _rc == 0 {
+    gen les = PL031
+    label variable les "Labour Economic Status (PL031)"
+    di "LES variable (PL031) found and created"
+    tab les, missing
+}
+else {
+    di as error "LES variable (PL031) not found - IWP Employees analysis not possible"
+    gen les = .
+}
 
 * Months worked - ALL work (employee + self-employed)
 capture confirm variable PL073
@@ -318,6 +331,16 @@ label values age_group age_lbl
 gen worker = (months_worked > 6 & age >= 18 & age <= 64)
 label variable worker "Worker (>6 months, age 18-64)"
 
+* Employee indicator (LES == 3)
+gen byte employee = (les == 3)
+label variable employee "Employee (LES == 3)"
+
+di _n "Distribution of LES among workers:"
+tab les if worker == 1, missing
+
+di _n "Number of employees (LES == 3):"
+tab employee if worker == 1
+
 *===============================================================================
 * IN WORK POVERTY POST AND PRE
 *===============================================================================
@@ -374,13 +397,43 @@ label variable axipre_gr "AROP without IWP gap relative pre percent"
 gen byte axilifted = (arop_excl_iwp_pre == 1 & arop_excl_iwp == 0)
 label variable axilifted "Non-workers lifted out by transfers"
 
+*===============================================================================
+* IWP EMPLOYEES (LES == 3)
+*===============================================================================
+di _n "=== Generating IWP Employees status (LES == 3) ===" _n
+
+* IWP Employees post
+gen byte iwp_emp = (inwork_poor == 1 & les == 3)
+label variable iwp_emp "IWP Employees post transfer (LES==3)"
+
+gen double iwpe_ga = pov60 - eq_hh_post if iwp_emp == 1
+label variable iwpe_ga "IWP Employees gap absolute post"
+
+gen double iwpe_gr = ((pov60 - eq_hh_post) / pov60) * 100 if iwp_emp == 1
+label variable iwpe_gr "IWP Employees gap relative post percent"
+
+* IWP Employees pre
+gen byte iwp_emp_pre = (inwork_poor_pre == 1 & les == 3)
+label variable iwp_emp_pre "IWP Employees pre transfer (LES==3)"
+
+gen double iwpepre_ga = pov60 - eq_hh_pre if iwp_emp_pre == 1
+label variable iwpepre_ga "IWP Employees gap absolute pre"
+
+gen double iwpepre_gr = ((pov60 - eq_hh_pre) / pov60) * 100 if iwp_emp_pre == 1
+label variable iwpepre_gr "IWP Employees gap relative pre percent"
+
+gen byte iwpelifted = (iwp_emp_pre == 1 & iwp_emp == 0)
+label variable iwpelifted "Employee workers lifted out by transfers"
+
 di _n "Poverty status identified"
 di "Total observations: " _N
+di _n "IWP vs IWP Employees comparison:"
+tab inwork_poor iwp_emp if worker == 1, missing
 
 * Save micro-level data
 capture mkdir "$output"
 save "$output/ALL_POV_IND_SILC_PrePost_HH.dta", replace
-di "Micro-level data saved with Pre/Post and AROP without IWP variables"
+di "Micro-level data saved with Pre/Post, AROP without IWP, and IWP Employees variables"
 
 *===============================================================================
 * YEAR LEVEL STATISTICS
@@ -413,11 +466,15 @@ foreach yr of local years {
 
         sum ar_gr [aw=dwt] if year == `yr' & arop == 1
         local argr_`yr' = r(mean)
+        
+        sum months_worked [aw=dwt] if year == `yr' & arop == 1
+        local monar_`yr' = r(mean)
     }
     else {
         local arga_`yr' = .
         local argam_`yr' = .
         local argr_`yr' = .
+        local monar_`yr' = .
     }
 
     * AROP pre
@@ -437,11 +494,15 @@ foreach yr of local years {
 
         sum arpre_gr [aw=dwt] if year == `yr' & arop_pre == 1
         local arpre_gr_`yr' = r(mean)
+        
+        sum months_worked [aw=dwt] if year == `yr' & arop_pre == 1
+        local monarpre_`yr' = r(mean)
     }
     else {
         local arpre_ga_`yr' = .
         local arpre_gam_`yr' = .
         local arpre_gr_`yr' = .
+        local monarpre_`yr' = .
     }
 
     * AROP reduction
@@ -519,11 +580,15 @@ foreach yr of local years {
 
             sum iwpre_gr [aw=dwt] if year == `yr' & inwork_poor_pre == 1
             local iwpre_gr_`yr' = r(mean)
+            
+            sum months_worked [aw=dwt] if year == `yr' & inwork_poor_pre == 1
+            local moniwpre_`yr' = r(mean)
         }
         else {
             local iwpre_ga_`yr' = .
             local iwpre_gam_`yr' = .
             local iwpre_gr_`yr' = .
+            local moniwpre_`yr' = .
         }
 
         local iwrpp_`yr' = `iwpre_`yr'' - `iw_`yr''
@@ -567,11 +632,15 @@ foreach yr of local years {
 
         sum axi_gr [aw=dwt] if year == `yr' & arop_excl_iwp == 1
         local axigr_`yr' = r(mean)
+        
+        sum months_worked [aw=dwt] if year == `yr' & arop_excl_iwp == 1
+        local monaxi_`yr' = r(mean)
     }
     else {
         local axiga_`yr' = .
         local axigam_`yr' = .
         local axigr_`yr' = .
+        local monaxi_`yr' = .
     }
 
     * AROP without IWP pre
@@ -591,11 +660,15 @@ foreach yr of local years {
 
         sum axipre_gr [aw=dwt] if year == `yr' & arop_excl_iwp_pre == 1
         local axipre_gr_`yr' = r(mean)
+        
+        sum months_worked [aw=dwt] if year == `yr' & arop_excl_iwp_pre == 1
+        local monaxipre_`yr' = r(mean)
     }
     else {
         local axipre_ga_`yr' = .
         local axipre_gam_`yr' = .
         local axipre_gr_`yr' = .
+        local monaxipre_`yr' = .
     }
 
     * AROP without IWP reduction
@@ -611,6 +684,102 @@ foreach yr of local years {
     sum temp_axilift_`yr'
     local naxilift_`yr' = r(sum)
     drop temp_axilift_`yr'
+
+    * IWP Employees (LES == 3) post
+    quietly count if year == `yr' & worker == 1 & les == 3
+    if r(N) > 0 {
+        sum iwp_emp [aw=dwt] if year == `yr' & worker == 1 & les == 3
+        local iwpe_`yr' = r(mean) * 100
+
+        sum dwt if year == `yr' & worker == 1 & les == 3
+        local nemp_`yr' = r(sum)
+
+        gen temp_iwpe_`yr' = iwp_emp * dwt if year == `yr' & worker == 1 & les == 3
+        sum temp_iwpe_`yr'
+        local niwpe_`yr' = r(sum)
+        drop temp_iwpe_`yr'
+
+        quietly count if year == `yr' & iwp_emp == 1
+        if r(N) > 0 {
+            sum iwpe_ga [aw=dwt] if year == `yr' & iwp_emp == 1
+            local iwpega_`yr' = r(mean)
+            local iwpegam_`yr' = r(mean) / 12
+
+            sum iwpe_gr [aw=dwt] if year == `yr' & iwp_emp == 1
+            local iwpegr_`yr' = r(mean)
+        }
+        else {
+            local iwpega_`yr' = .
+            local iwpegam_`yr' = .
+            local iwpegr_`yr' = .
+        }
+
+        sum months_worked [aw=dwt] if year == `yr' & worker == 1 & les == 3
+        local monemp_`yr' = r(mean)
+    }
+    else {
+        local iwpe_`yr' = .
+        local nemp_`yr' = .
+        local niwpe_`yr' = .
+        local iwpega_`yr' = .
+        local iwpegam_`yr' = .
+        local iwpegr_`yr' = .
+        local monemp_`yr' = .
+    }
+
+    * IWP Employees pre
+    quietly count if year == `yr' & worker == 1 & les == 3
+    if r(N) > 0 {
+        sum iwp_emp_pre [aw=dwt] if year == `yr' & worker == 1 & les == 3
+        local iwpepre_`yr' = r(mean) * 100
+
+        gen temp_iwpepre_`yr' = iwp_emp_pre * dwt if year == `yr' & worker == 1 & les == 3
+        sum temp_iwpepre_`yr'
+        local niwpepre_`yr' = r(sum)
+        drop temp_iwpepre_`yr'
+
+        quietly count if year == `yr' & iwp_emp_pre == 1
+        if r(N) > 0 {
+            sum iwpepre_ga [aw=dwt] if year == `yr' & iwp_emp_pre == 1
+            local iwpepre_ga_`yr' = r(mean)
+            local iwpepre_gam_`yr' = r(mean) / 12
+
+            sum iwpepre_gr [aw=dwt] if year == `yr' & iwp_emp_pre == 1
+            local iwpepre_gr_`yr' = r(mean)
+            
+            sum months_worked [aw=dwt] if year == `yr' & iwp_emp_pre == 1
+            local monemppre_`yr' = r(mean)
+        }
+        else {
+            local iwpepre_ga_`yr' = .
+            local iwpepre_gam_`yr' = .
+            local iwpepre_gr_`yr' = .
+            local monemppre_`yr' = .
+        }
+
+        local iwperpp_`yr' = `iwpepre_`yr'' - `iwpe_`yr''
+        if `iwpepre_`yr'' > 0 {
+            local iwperpc_`yr' = (`iwperpp_`yr'' / `iwpepre_`yr'') * 100
+        }
+        else {
+            local iwperpc_`yr' = .
+        }
+
+        gen temp_iwpelift_`yr' = iwpelifted * dwt if year == `yr' & worker == 1 & les == 3
+        sum temp_iwpelift_`yr'
+        local niwpelift_`yr' = r(sum)
+        drop temp_iwpelift_`yr'
+    }
+    else {
+        local iwpepre_`yr' = .
+        local niwpepre_`yr' = .
+        local iwpepre_ga_`yr' = .
+        local iwpepre_gam_`yr' = .
+        local iwpepre_gr_`yr' = .
+        local iwperpp_`yr' = .
+        local iwperpc_`yr' = .
+        local niwpelift_`yr' = .
+    }
 
     * Shared
     sum pov60 if year == `yr', meanonly
@@ -633,6 +802,7 @@ foreach yr of local years {
     di "Year `yr': PRE AROP=" %5.2f `arpre_`yr'' "% POST AROP=" %5.2f `ar_`yr'' "% Reduction pct=" %5.2f `arrpc_`yr''
     di "         PRE IWP=" %5.2f `iwpre_`yr'' "% POST IWP=" %5.2f `iw_`yr'' "% Reduction pct=" %5.2f `iwrpc_`yr''
     di "         PRE AXI=" %5.2f `axipre_`yr'' "% POST AXI=" %5.2f `axi_`yr'' "% Reduction pct=" %5.2f `axirpc_`yr''
+    di "         PRE IWPE=" %5.2f `iwpepre_`yr'' "% POST IWPE=" %5.2f `iwpe_`yr'' "% Reduction pct=" %5.2f `iwperpc_`yr''
 }
 
 *===============================================================================
@@ -657,6 +827,8 @@ foreach yr of local years {
             local argam_sx`sx'_`yr' = .
             local arpre_ga_sx`sx'_`yr' = .
             local arpre_gam_sx`sx'_`yr' = .
+            local monar_sx`sx'_`yr' = .
+            local monarpre_sx`sx'_`yr' = .
             local iw_sx`sx'_`yr' = .
             local iwpre_sx`sx'_`yr' = .
             local nwrk_sx`sx'_`yr' = .
@@ -675,6 +847,16 @@ foreach yr of local years {
             local axigam_sx`sx'_`yr' = .
             local axipre_ga_sx`sx'_`yr' = .
             local axipre_gam_sx`sx'_`yr' = .
+            local iwpe_sx`sx'_`yr' = .
+            local iwpepre_sx`sx'_`yr' = .
+            local nemp_sx`sx'_`yr' = .
+            local niwpe_sx`sx'_`yr' = .
+            local niwpepre_sx`sx'_`yr' = .
+            local iwpega_sx`sx'_`yr' = .
+            local iwpegam_sx`sx'_`yr' = .
+            local iwpepre_ga_sx`sx'_`yr' = .
+            local iwpepre_gam_sx`sx'_`yr' = .
+            local monemp_sx`sx'_`yr' = .
             continue
         }
         
@@ -692,10 +874,14 @@ foreach yr of local years {
             sum ar_ga [aw=dwt] if year == `yr' & sex == `sx' & arop == 1
             local arga_sx`sx'_`yr' = r(mean)
             local argam_sx`sx'_`yr' = r(mean) / 12
+            
+            sum months_worked [aw=dwt] if year == `yr' & sex == `sx' & arop == 1
+            local monar_sx`sx'_`yr' = r(mean)
         }
         else {
             local arga_sx`sx'_`yr' = .
             local argam_sx`sx'_`yr' = .
+            local monar_sx`sx'_`yr' = .
         }
         
         * AROP pre
@@ -712,10 +898,14 @@ foreach yr of local years {
             sum arpre_ga [aw=dwt] if year == `yr' & sex == `sx' & arop_pre == 1
             local arpre_ga_sx`sx'_`yr' = r(mean)
             local arpre_gam_sx`sx'_`yr' = r(mean) / 12
+            
+            sum months_worked [aw=dwt] if year == `yr' & sex == `sx' & arop_pre == 1
+            local monarpre_sx`sx'_`yr' = r(mean)
         }
         else {
             local arpre_ga_sx`sx'_`yr' = .
             local arpre_gam_sx`sx'_`yr' = .
+            local monarpre_sx`sx'_`yr' = .
         }
         
         * IWP post
@@ -771,10 +961,14 @@ foreach yr of local years {
                 sum iwpre_ga [aw=dwt] if year == `yr' & sex == `sx' & inwork_poor_pre == 1
                 local iwpre_ga_sx`sx'_`yr' = r(mean)
                 local iwpre_gam_sx`sx'_`yr' = r(mean) / 12
+                
+                sum months_worked [aw=dwt] if year == `yr' & sex == `sx' & inwork_poor_pre == 1
+                local moniwpre_sx`sx'_`yr' = r(mean)
             }
             else {
                 local iwpre_ga_sx`sx'_`yr' = .
                 local iwpre_gam_sx`sx'_`yr' = .
+                local moniwpre_sx`sx'_`yr' = .
             }
         }
         else {
@@ -798,10 +992,14 @@ foreach yr of local years {
             sum axi_ga [aw=dwt] if year == `yr' & sex == `sx' & arop_excl_iwp == 1
             local axiga_sx`sx'_`yr' = r(mean)
             local axigam_sx`sx'_`yr' = r(mean) / 12
+            
+            sum months_worked [aw=dwt] if year == `yr' & sex == `sx' & arop_excl_iwp == 1
+            local monaxi_sx`sx'_`yr' = r(mean)
         }
         else {
             local axiga_sx`sx'_`yr' = .
             local axigam_sx`sx'_`yr' = .
+            local monaxi_sx`sx'_`yr' = .
         }
         
         * AROP without IWP pre
@@ -818,10 +1016,84 @@ foreach yr of local years {
             sum axipre_ga [aw=dwt] if year == `yr' & sex == `sx' & arop_excl_iwp_pre == 1
             local axipre_ga_sx`sx'_`yr' = r(mean)
             local axipre_gam_sx`sx'_`yr' = r(mean) / 12
+            
+            sum months_worked [aw=dwt] if year == `yr' & sex == `sx' & arop_excl_iwp_pre == 1
+            local monaxipre_sx`sx'_`yr' = r(mean)
         }
         else {
             local axipre_ga_sx`sx'_`yr' = .
             local axipre_gam_sx`sx'_`yr' = .
+            local monaxipre_sx`sx'_`yr' = .
+        }
+        
+        * IWP Employees (LES == 3) post
+        quietly count if year == `yr' & sex == `sx' & worker == 1 & les == 3
+        if r(N) > 0 {
+            sum iwp_emp [aw=dwt] if year == `yr' & sex == `sx' & worker == 1 & les == 3
+            local iwpe_sx`sx'_`yr' = r(mean) * 100
+            
+            sum dwt if year == `yr' & sex == `sx' & worker == 1 & les == 3
+            local nemp_sx`sx'_`yr' = r(sum)
+            
+            gen temp_niwpe_sx`sx'_`yr' = iwp_emp * dwt if year == `yr' & sex == `sx' & worker == 1 & les == 3
+            sum temp_niwpe_sx`sx'_`yr'
+            local niwpe_sx`sx'_`yr' = r(sum)
+            drop temp_niwpe_sx`sx'_`yr'
+            
+            sum months_worked [aw=dwt] if year == `yr' & sex == `sx' & worker == 1 & les == 3
+            local monemp_sx`sx'_`yr' = r(mean)
+            
+            quietly count if year == `yr' & sex == `sx' & iwp_emp == 1
+            if r(N) > 0 {
+                sum iwpe_ga [aw=dwt] if year == `yr' & sex == `sx' & iwp_emp == 1
+                local iwpega_sx`sx'_`yr' = r(mean)
+                local iwpegam_sx`sx'_`yr' = r(mean) / 12
+            }
+            else {
+                local iwpega_sx`sx'_`yr' = .
+                local iwpegam_sx`sx'_`yr' = .
+            }
+        }
+        else {
+            local iwpe_sx`sx'_`yr' = .
+            local nemp_sx`sx'_`yr' = .
+            local niwpe_sx`sx'_`yr' = .
+            local monemp_sx`sx'_`yr' = .
+            local iwpega_sx`sx'_`yr' = .
+            local iwpegam_sx`sx'_`yr' = .
+        }
+        
+        * IWP Employees pre
+        quietly count if year == `yr' & sex == `sx' & worker == 1 & les == 3
+        if r(N) > 0 {
+            sum iwp_emp_pre [aw=dwt] if year == `yr' & sex == `sx' & worker == 1 & les == 3
+            local iwpepre_sx`sx'_`yr' = r(mean) * 100
+            
+            gen temp_niwpepre_sx`sx'_`yr' = iwp_emp_pre * dwt if year == `yr' & sex == `sx' & worker == 1 & les == 3
+            sum temp_niwpepre_sx`sx'_`yr'
+            local niwpepre_sx`sx'_`yr' = r(sum)
+            drop temp_niwpepre_sx`sx'_`yr'
+            
+            quietly count if year == `yr' & sex == `sx' & iwp_emp_pre == 1
+            if r(N) > 0 {
+                sum iwpepre_ga [aw=dwt] if year == `yr' & sex == `sx' & iwp_emp_pre == 1
+                local iwpepre_ga_sx`sx'_`yr' = r(mean)
+                local iwpepre_gam_sx`sx'_`yr' = r(mean) / 12
+                
+                sum months_worked [aw=dwt] if year == `yr' & sex == `sx' & iwp_emp_pre == 1
+                local monemppre_sx`sx'_`yr' = r(mean)
+            }
+            else {
+                local iwpepre_ga_sx`sx'_`yr' = .
+                local iwpepre_gam_sx`sx'_`yr' = .
+                local monemppre_sx`sx'_`yr' = .
+            }
+        }
+        else {
+            local iwpepre_sx`sx'_`yr' = .
+            local niwpepre_sx`sx'_`yr' = .
+            local iwpepre_ga_sx`sx'_`yr' = .
+            local iwpepre_gam_sx`sx'_`yr' = .
         }
     }
     
@@ -870,6 +1142,16 @@ foreach yr of local years {
     sum temp_axi_pre_`yr'
     local taxipre_`yr' = r(sum)
     drop temp_axi_pre_`yr'
+    
+    gen temp_iwpe_post_`yr' = iwp_emp * dwt if year == `yr' & worker == 1 & les == 3
+    sum temp_iwpe_post_`yr'
+    local tiwpe_`yr' = r(sum)
+    drop temp_iwpe_post_`yr'
+    
+    gen temp_iwpe_pre_`yr' = iwp_emp_pre * dwt if year == `yr' & worker == 1 & les == 3
+    sum temp_iwpe_pre_`yr'
+    local tiwpepre_`yr' = r(sum)
+    drop temp_iwpe_pre_`yr'
 }
 
 foreach yr of local years {
@@ -895,6 +1177,8 @@ foreach yr of local years {
             local argam_hh`ht'_`yr' = .
             local arpre_ga_hh`ht'_`yr' = .
             local arpre_gam_hh`ht'_`yr' = .
+            local monar_hh`ht'_`yr' = .
+            local monarpre_hh`ht'_`yr' = .
             local iw_hh`ht'_`yr' = .
             local iwpre_hh`ht'_`yr' = .
             local iwrpp_hh`ht'_`yr' = .
@@ -923,6 +1207,20 @@ foreach yr of local years {
             local axigam_hh`ht'_`yr' = .
             local axipre_ga_hh`ht'_`yr' = .
             local axipre_gam_hh`ht'_`yr' = .
+            local iwpe_hh`ht'_`yr' = .
+            local iwpepre_hh`ht'_`yr' = .
+            local iwperpp_hh`ht'_`yr' = .
+            local iwperpc_hh`ht'_`yr' = .
+            local shiwpe_hh`ht'_`yr' = .
+            local shiwpepre_hh`ht'_`yr' = .
+            local nemp_hh`ht'_`yr' = .
+            local niwpe_hh`ht'_`yr' = .
+            local niwpepre_hh`ht'_`yr' = .
+            local iwpega_hh`ht'_`yr' = .
+            local iwpegam_hh`ht'_`yr' = .
+            local iwpepre_ga_hh`ht'_`yr' = .
+            local iwpepre_gam_hh`ht'_`yr' = .
+            local monemp_hh`ht'_`yr' = .
             continue
         }
         
@@ -952,10 +1250,14 @@ foreach yr of local years {
             sum ar_ga [aw=dwt] if year == `yr' & hh_type == `ht' & arop == 1
             local arga_hh`ht'_`yr' = r(mean)
             local argam_hh`ht'_`yr' = r(mean) / 12
+            
+            sum months_worked [aw=dwt] if year == `yr' & hh_type == `ht' & arop == 1
+            local monar_hh`ht'_`yr' = r(mean)
         }
         else {
             local arga_hh`ht'_`yr' = .
             local argam_hh`ht'_`yr' = .
+            local monar_hh`ht'_`yr' = .
         }
         
         * AROP pre
@@ -979,10 +1281,14 @@ foreach yr of local years {
             sum arpre_ga [aw=dwt] if year == `yr' & hh_type == `ht' & arop_pre == 1
             local arpre_ga_hh`ht'_`yr' = r(mean)
             local arpre_gam_hh`ht'_`yr' = r(mean) / 12
+            
+            sum months_worked [aw=dwt] if year == `yr' & hh_type == `ht' & arop_pre == 1
+            local monarpre_hh`ht'_`yr' = r(mean)
         }
         else {
             local arpre_ga_hh`ht'_`yr' = .
             local arpre_gam_hh`ht'_`yr' = .
+            local monarpre_hh`ht'_`yr' = .
         }
         
         * AROP reduction
@@ -1070,10 +1376,14 @@ foreach yr of local years {
                 sum iwpre_ga [aw=dwt] if year == `yr' & hh_type == `ht' & inwork_poor_pre == 1
                 local iwpre_ga_hh`ht'_`yr' = r(mean)
                 local iwpre_gam_hh`ht'_`yr' = r(mean) / 12
+                
+                sum months_worked [aw=dwt] if year == `yr' & hh_type == `ht' & inwork_poor_pre == 1
+                local moniwpre_hh`ht'_`yr' = r(mean)
             }
             else {
                 local iwpre_ga_hh`ht'_`yr' = .
                 local iwpre_gam_hh`ht'_`yr' = .
+                local moniwpre_hh`ht'_`yr' = .
             }
         }
         else {
@@ -1107,10 +1417,14 @@ foreach yr of local years {
             sum axi_ga [aw=dwt] if year == `yr' & hh_type == `ht' & arop_excl_iwp == 1
             local axiga_hh`ht'_`yr' = r(mean)
             local axigam_hh`ht'_`yr' = r(mean) / 12
+            
+            sum months_worked [aw=dwt] if year == `yr' & hh_type == `ht' & arop_excl_iwp == 1
+            local monaxi_hh`ht'_`yr' = r(mean)
         }
         else {
             local axiga_hh`ht'_`yr' = .
             local axigam_hh`ht'_`yr' = .
+            local monaxi_hh`ht'_`yr' = .
         }
         
         * AROP without IWP pre
@@ -1143,10 +1457,110 @@ foreach yr of local years {
             sum axipre_ga [aw=dwt] if year == `yr' & hh_type == `ht' & arop_excl_iwp_pre == 1
             local axipre_ga_hh`ht'_`yr' = r(mean)
             local axipre_gam_hh`ht'_`yr' = r(mean) / 12
+            
+            sum months_worked [aw=dwt] if year == `yr' & hh_type == `ht' & arop_excl_iwp_pre == 1
+            local monaxipre_hh`ht'_`yr' = r(mean)
         }
         else {
             local axipre_ga_hh`ht'_`yr' = .
             local axipre_gam_hh`ht'_`yr' = .
+            local monaxipre_hh`ht'_`yr' = .
+        }
+        
+        * IWP Employees (LES == 3) post
+        quietly count if year == `yr' & hh_type == `ht' & worker == 1 & les == 3
+        if r(N) > 0 {
+            sum iwp_emp [aw=dwt] if year == `yr' & hh_type == `ht' & worker == 1 & les == 3
+            local iwpe_hh`ht'_`yr' = r(mean) * 100
+            
+            sum dwt if year == `yr' & hh_type == `ht' & worker == 1 & les == 3
+            local nemp_hh`ht'_`yr' = r(sum)
+            
+            gen temp_niwpe_hh`ht'_`yr' = iwp_emp * dwt if year == `yr' & hh_type == `ht' & worker == 1 & les == 3
+            sum temp_niwpe_hh`ht'_`yr'
+            local niwpe_hh`ht'_`yr' = r(sum)
+            drop temp_niwpe_hh`ht'_`yr'
+            
+            if `tiwpe_`yr'' > 0 {
+                local shiwpe_hh`ht'_`yr' = (`niwpe_hh`ht'_`yr'' / `tiwpe_`yr'') * 100
+            }
+            else {
+                local shiwpe_hh`ht'_`yr' = .
+            }
+            
+            sum months_worked [aw=dwt] if year == `yr' & hh_type == `ht' & worker == 1 & les == 3
+            local monemp_hh`ht'_`yr' = r(mean)
+            
+            quietly count if year == `yr' & hh_type == `ht' & iwp_emp == 1
+            if r(N) > 0 {
+                sum iwpe_ga [aw=dwt] if year == `yr' & hh_type == `ht' & iwp_emp == 1
+                local iwpega_hh`ht'_`yr' = r(mean)
+                local iwpegam_hh`ht'_`yr' = r(mean) / 12
+            }
+            else {
+                local iwpega_hh`ht'_`yr' = .
+                local iwpegam_hh`ht'_`yr' = .
+            }
+        }
+        else {
+            local iwpe_hh`ht'_`yr' = .
+            local nemp_hh`ht'_`yr' = .
+            local niwpe_hh`ht'_`yr' = .
+            local shiwpe_hh`ht'_`yr' = .
+            local monemp_hh`ht'_`yr' = .
+            local iwpega_hh`ht'_`yr' = .
+            local iwpegam_hh`ht'_`yr' = .
+        }
+        
+        * IWP Employees pre
+        quietly count if year == `yr' & hh_type == `ht' & worker == 1 & les == 3
+        if r(N) > 0 {
+            sum iwp_emp_pre [aw=dwt] if year == `yr' & hh_type == `ht' & worker == 1 & les == 3
+            local iwpepre_hh`ht'_`yr' = r(mean) * 100
+            
+            gen temp_niwpepre_hh`ht'_`yr' = iwp_emp_pre * dwt if year == `yr' & hh_type == `ht' & worker == 1 & les == 3
+            sum temp_niwpepre_hh`ht'_`yr'
+            local niwpepre_hh`ht'_`yr' = r(sum)
+            drop temp_niwpepre_hh`ht'_`yr'
+            
+            if `tiwpepre_`yr'' > 0 {
+                local shiwpepre_hh`ht'_`yr' = (`niwpepre_hh`ht'_`yr'' / `tiwpepre_`yr'') * 100
+            }
+            else {
+                local shiwpepre_hh`ht'_`yr' = .
+            }
+            
+            local iwperpp_hh`ht'_`yr' = `iwpepre_hh`ht'_`yr'' - `iwpe_hh`ht'_`yr''
+            if `iwpepre_hh`ht'_`yr'' > 0 {
+                local iwperpc_hh`ht'_`yr' = (`iwperpp_hh`ht'_`yr'' / `iwpepre_hh`ht'_`yr'') * 100
+            }
+            else {
+                local iwperpc_hh`ht'_`yr' = .
+            }
+            
+            quietly count if year == `yr' & hh_type == `ht' & iwp_emp_pre == 1
+            if r(N) > 0 {
+                sum iwpepre_ga [aw=dwt] if year == `yr' & hh_type == `ht' & iwp_emp_pre == 1
+                local iwpepre_ga_hh`ht'_`yr' = r(mean)
+                local iwpepre_gam_hh`ht'_`yr' = r(mean) / 12
+                
+                sum months_worked [aw=dwt] if year == `yr' & hh_type == `ht' & iwp_emp_pre == 1
+                local monemppre_hh`ht'_`yr' = r(mean)
+            }
+            else {
+                local iwpepre_ga_hh`ht'_`yr' = .
+                local iwpepre_gam_hh`ht'_`yr' = .
+                local monemppre_hh`ht'_`yr' = .
+            }
+        }
+        else {
+            local iwpepre_hh`ht'_`yr' = .
+            local niwpepre_hh`ht'_`yr' = .
+            local shiwpepre_hh`ht'_`yr' = .
+            local iwperpp_hh`ht'_`yr' = .
+            local iwperpc_hh`ht'_`yr' = .
+            local iwpepre_ga_hh`ht'_`yr' = .
+            local iwpepre_gam_hh`ht'_`yr' = .
         }
         
         sum pov_hh if year == `yr' & hh_type == `ht', meanonly
@@ -1167,7 +1581,7 @@ di _n "=== Creating Excel output with Pre/Post/Change structure ===" _n
 preserve
 
 clear
-set obs 1000
+set obs 1200
 
 gen str140 Variable = ""
 
@@ -1235,10 +1649,17 @@ foreach yr of local years {
 }
 local row = `row' + 1
 
+replace Variable = "Avg Months Worked (AROP)" in `row'
+foreach yr of local years {
+    replace Y`yr'_pre = `monarpre_`yr'' in `row'
+    replace Y`yr'_post = `monar_`yr'' in `row'
+}
+local row = `row' + 1
+
 replace Variable = "" in `row'
 local row = `row' + 1
 
-replace Variable = "Number of Employed" in `row'
+replace Variable = "Number of Employed (Workers)" in `row'
 foreach yr of local years {
     replace Y`yr'_post = `nwrk_`yr'' in `row'
 }
@@ -1260,7 +1681,7 @@ foreach yr of local years {
 }
 local row = `row' + 1
 
-replace Variable = "Number Employees IWP" in `row'
+replace Variable = "Number Workers IWP" in `row'
 foreach yr of local years {
     replace Y`yr'_pre = `niwpre_`yr'' in `row'
     replace Y`yr'_post = `niw_`yr'' in `row'
@@ -1299,8 +1720,9 @@ foreach yr of local years {
 }
 local row = `row' + 1
 
-replace Variable = "Avg Months Worked" in `row'
+replace Variable = "Avg Months Worked (Workers)" in `row'
 foreach yr of local years {
+    replace Y`yr'_pre = `moniwpre_`yr'' in `row'
     replace Y`yr'_post = `mon_`yr'' in `row'
 }
 local row = `row' + 1
@@ -1357,6 +1779,72 @@ foreach yr of local years {
             replace Y`yr'_ChPct = ((`axigam_`yr'' - `axipre_gam_`yr'') / `axipre_gam_`yr'') * 100 in `row'
         }
     }
+}
+local row = `row' + 1
+
+replace Variable = "Avg Months Worked (AROP w/o IWP)" in `row'
+foreach yr of local years {
+    replace Y`yr'_pre = `monaxipre_`yr'' in `row'
+    replace Y`yr'_post = `monaxi_`yr'' in `row'
+}
+local row = `row' + 1
+
+replace Variable = "IWP LES==3 only (%)" in `row'
+foreach yr of local years {
+    replace Y`yr'_pre = `iwpepre_`yr'' in `row'
+    replace Y`yr'_post = `iwpe_`yr'' in `row'
+    if !missing(`iwpepre_`yr'') & !missing(`iwpe_`yr'') {
+        replace Y`yr'_Ch = `iwpe_`yr'' - `iwpepre_`yr'' in `row'
+        if `iwpepre_`yr'' > 0 {
+            replace Y`yr'_ChPct = ((`iwpe_`yr'' - `iwpepre_`yr'') / `iwpepre_`yr'') * 100 in `row'
+        }
+    }
+}
+local row = `row' + 1
+
+replace Variable = "Number People IWP LES==3 only" in `row'
+foreach yr of local years {
+    replace Y`yr'_pre = `niwpepre_`yr'' in `row'
+    replace Y`yr'_post = `niwpe_`yr'' in `row'
+    if !missing(`niwpepre_`yr'') & !missing(`niwpe_`yr'') {
+        replace Y`yr'_Ch = `niwpe_`yr'' - `niwpepre_`yr'' in `row'
+        if `niwpepre_`yr'' > 0 {
+            replace Y`yr'_ChPct = ((`niwpe_`yr'' - `niwpepre_`yr'') / `niwpepre_`yr'') * 100 in `row'
+        }
+    }
+}
+local row = `row' + 1
+
+replace Variable = "Avg IWP LES==3 Gap Annual (€)" in `row'
+foreach yr of local years {
+    replace Y`yr'_pre = `iwpepre_ga_`yr'' in `row'
+    replace Y`yr'_post = `iwpega_`yr'' in `row'
+    if !missing(`iwpepre_ga_`yr'') & !missing(`iwpega_`yr'') {
+        replace Y`yr'_Ch = `iwpega_`yr'' - `iwpepre_ga_`yr'' in `row'
+        if `iwpepre_ga_`yr'' > 0 {
+            replace Y`yr'_ChPct = ((`iwpega_`yr'' - `iwpepre_ga_`yr'') / `iwpepre_ga_`yr'') * 100 in `row'
+        }
+    }
+}
+local row = `row' + 1
+
+replace Variable = "Avg IWP LES==3 Gap Monthly (€)" in `row'
+foreach yr of local years {
+    replace Y`yr'_pre = `iwpepre_gam_`yr'' in `row'
+    replace Y`yr'_post = `iwpegam_`yr'' in `row'
+    if !missing(`iwpepre_gam_`yr'') & !missing(`iwpegam_`yr'') {
+        replace Y`yr'_Ch = `iwpegam_`yr'' - `iwpepre_gam_`yr'' in `row'
+        if `iwpepre_gam_`yr'' > 0 {
+            replace Y`yr'_ChPct = ((`iwpegam_`yr'' - `iwpepre_gam_`yr'') / `iwpepre_gam_`yr'') * 100 in `row'
+        }
+    }
+}
+local row = `row' + 1
+
+replace Variable = "Avg Months Worked (LES==3)" in `row'
+foreach yr of local years {
+    replace Y`yr'_pre = `monemppre_`yr'' in `row'
+    replace Y`yr'_post = `monemp_`yr'' in `row'
 }
 local row = `row' + 1
 
@@ -1444,10 +1932,17 @@ forvalues sx = 1/2 {
     }
     local row = `row' + 1
     
+    replace Variable = "Avg Months Worked (AROP)" in `row'
+    foreach yr of local years {
+        replace Y`yr'_pre = `monarpre_sx`sx'_`yr'' in `row'
+        replace Y`yr'_post = `monar_sx`sx'_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
     replace Variable = "" in `row'
     local row = `row' + 1
     
-    replace Variable = "Number of Employed" in `row'
+    replace Variable = "Number of Employed (Workers)" in `row'
     foreach yr of local years {
         replace Y`yr'_post = `nwrk_sx`sx'_`yr'' in `row'
     }
@@ -1469,7 +1964,7 @@ forvalues sx = 1/2 {
     }
     local row = `row' + 1
     
-    replace Variable = "Number Employees IWP" in `row'
+    replace Variable = "Number Workers IWP" in `row'
     foreach yr of local years {
         replace Y`yr'_pre = `niwpre_sx`sx'_`yr'' in `row'
         replace Y`yr'_post = `niw_sx`sx'_`yr'' in `row'
@@ -1508,8 +2003,9 @@ forvalues sx = 1/2 {
     }
     local row = `row' + 1
     
-    replace Variable = "Avg Months Worked" in `row'
+    replace Variable = "Avg Months Worked (Workers)" in `row'
     foreach yr of local years {
+        replace Y`yr'_pre = `moniwpre_sx`sx'_`yr'' in `row'
         replace Y`yr'_post = `mon_sx`sx'_`yr'' in `row'
     }
     local row = `row' + 1
@@ -1566,6 +2062,72 @@ forvalues sx = 1/2 {
                 replace Y`yr'_ChPct = ((`axigam_sx`sx'_`yr'' - `axipre_gam_sx`sx'_`yr'') / `axipre_gam_sx`sx'_`yr'') * 100 in `row'
             }
         }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Avg Months Worked (AROP w/o IWP)" in `row'
+    foreach yr of local years {
+        replace Y`yr'_pre = `monaxipre_sx`sx'_`yr'' in `row'
+        replace Y`yr'_post = `monaxi_sx`sx'_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "IWP LES==3 only (%)" in `row'
+    foreach yr of local years {
+        replace Y`yr'_pre = `iwpepre_sx`sx'_`yr'' in `row'
+        replace Y`yr'_post = `iwpe_sx`sx'_`yr'' in `row'
+        if !missing(`iwpepre_sx`sx'_`yr'') & !missing(`iwpe_sx`sx'_`yr'') {
+            replace Y`yr'_Ch = `iwpe_sx`sx'_`yr'' - `iwpepre_sx`sx'_`yr'' in `row'
+            if `iwpepre_sx`sx'_`yr'' > 0 {
+                replace Y`yr'_ChPct = ((`iwpe_sx`sx'_`yr'' - `iwpepre_sx`sx'_`yr'') / `iwpepre_sx`sx'_`yr'') * 100 in `row'
+            }
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Number People IWP LES==3 only" in `row'
+    foreach yr of local years {
+        replace Y`yr'_pre = `niwpepre_sx`sx'_`yr'' in `row'
+        replace Y`yr'_post = `niwpe_sx`sx'_`yr'' in `row'
+        if !missing(`niwpepre_sx`sx'_`yr'') & !missing(`niwpe_sx`sx'_`yr'') {
+            replace Y`yr'_Ch = `niwpe_sx`sx'_`yr'' - `niwpepre_sx`sx'_`yr'' in `row'
+            if `niwpepre_sx`sx'_`yr'' > 0 {
+                replace Y`yr'_ChPct = ((`niwpe_sx`sx'_`yr'' - `niwpepre_sx`sx'_`yr'') / `niwpepre_sx`sx'_`yr'') * 100 in `row'
+            }
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Avg IWP LES==3 Gap Annual (€)" in `row'
+    foreach yr of local years {
+        replace Y`yr'_pre = `iwpepre_ga_sx`sx'_`yr'' in `row'
+        replace Y`yr'_post = `iwpega_sx`sx'_`yr'' in `row'
+        if !missing(`iwpepre_ga_sx`sx'_`yr'') & !missing(`iwpega_sx`sx'_`yr'') {
+            replace Y`yr'_Ch = `iwpega_sx`sx'_`yr'' - `iwpepre_ga_sx`sx'_`yr'' in `row'
+            if `iwpepre_ga_sx`sx'_`yr'' > 0 {
+                replace Y`yr'_ChPct = ((`iwpega_sx`sx'_`yr'' - `iwpepre_ga_sx`sx'_`yr'') / `iwpepre_ga_sx`sx'_`yr'') * 100 in `row'
+            }
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Avg IWP LES==3 Gap Monthly (€)" in `row'
+    foreach yr of local years {
+        replace Y`yr'_pre = `iwpepre_gam_sx`sx'_`yr'' in `row'
+        replace Y`yr'_post = `iwpegam_sx`sx'_`yr'' in `row'
+        if !missing(`iwpepre_gam_sx`sx'_`yr'') & !missing(`iwpegam_sx`sx'_`yr'') {
+            replace Y`yr'_Ch = `iwpegam_sx`sx'_`yr'' - `iwpepre_gam_sx`sx'_`yr'' in `row'
+            if `iwpepre_gam_sx`sx'_`yr'' > 0 {
+                replace Y`yr'_ChPct = ((`iwpegam_sx`sx'_`yr'' - `iwpepre_gam_sx`sx'_`yr'') / `iwpepre_gam_sx`sx'_`yr'') * 100 in `row'
+            }
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Avg Months Worked (LES==3)" in `row'
+    foreach yr of local years {
+        replace Y`yr'_pre = `monemppre_sx`sx'_`yr'' in `row'
+        replace Y`yr'_post = `monemp_sx`sx'_`yr'' in `row'
     }
     local row = `row' + 2
 }
@@ -1680,10 +2242,17 @@ forvalues ht = 1/10 {
     }
     local row = `row' + 1
     
+    replace Variable = "Avg Months Worked (AROP)" in `row'
+    foreach yr of local years {
+        replace Y`yr'_pre = `monarpre_hh`ht'_`yr'' in `row'
+        replace Y`yr'_post = `monar_hh`ht'_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
     replace Variable = "" in `row'
     local row = `row' + 1
     
-    replace Variable = "Number of Employed" in `row'
+    replace Variable = "Number of Employed (Workers)" in `row'
     foreach yr of local years {
         replace Y`yr'_post = `nwrk_hh`ht'_`yr'' in `row'
     }
@@ -1718,7 +2287,7 @@ forvalues ht = 1/10 {
     }
     local row = `row' + 1
     
-    replace Variable = "Number Employees IWP" in `row'
+    replace Variable = "Number Workers IWP" in `row'
     foreach yr of local years {
         replace Y`yr'_pre = `niwpre_hh`ht'_`yr'' in `row'
         replace Y`yr'_post = `niw_hh`ht'_`yr'' in `row'
@@ -1757,8 +2326,9 @@ forvalues ht = 1/10 {
     }
     local row = `row' + 1
     
-    replace Variable = "Avg Months Worked" in `row'
+    replace Variable = "Avg Months Worked (Workers)" in `row'
     foreach yr of local years {
+        replace Y`yr'_pre = `moniwpre_hh`ht'_`yr'' in `row'
         replace Y`yr'_post = `mon_hh`ht'_`yr'' in `row'
     }
     local row = `row' + 1
@@ -1831,6 +2401,72 @@ forvalues ht = 1/10 {
     }
     local row = `row' + 1
     
+    replace Variable = "Avg Months Worked (AROP w/o IWP)" in `row'
+    foreach yr of local years {
+        replace Y`yr'_pre = `monaxipre_hh`ht'_`yr'' in `row'
+        replace Y`yr'_post = `monaxi_hh`ht'_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
+    replace Variable = "IWP LES==3 only (%)" in `row'
+    foreach yr of local years {
+        replace Y`yr'_pre = `iwpepre_hh`ht'_`yr'' in `row'
+        replace Y`yr'_post = `iwpe_hh`ht'_`yr'' in `row'
+        if !missing(`iwpepre_hh`ht'_`yr'') & !missing(`iwpe_hh`ht'_`yr'') {
+            replace Y`yr'_Ch = `iwpe_hh`ht'_`yr'' - `iwpepre_hh`ht'_`yr'' in `row'
+            if `iwpepre_hh`ht'_`yr'' > 0 {
+                replace Y`yr'_ChPct = ((`iwpe_hh`ht'_`yr'' - `iwpepre_hh`ht'_`yr'') / `iwpepre_hh`ht'_`yr'') * 100 in `row'
+            }
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Number People IWP LES==3 only" in `row'
+    foreach yr of local years {
+        replace Y`yr'_pre = `niwpepre_hh`ht'_`yr'' in `row'
+        replace Y`yr'_post = `niwpe_hh`ht'_`yr'' in `row'
+        if !missing(`niwpepre_hh`ht'_`yr'') & !missing(`niwpe_hh`ht'_`yr'') {
+            replace Y`yr'_Ch = `niwpe_hh`ht'_`yr'' - `niwpepre_hh`ht'_`yr'' in `row'
+            if `niwpepre_hh`ht'_`yr'' > 0 {
+                replace Y`yr'_ChPct = ((`niwpe_hh`ht'_`yr'' - `niwpepre_hh`ht'_`yr'') / `niwpepre_hh`ht'_`yr'') * 100 in `row'
+            }
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Avg IWP LES==3 Gap Annual (€)" in `row'
+    foreach yr of local years {
+        replace Y`yr'_pre = `iwpepre_ga_hh`ht'_`yr'' in `row'
+        replace Y`yr'_post = `iwpega_hh`ht'_`yr'' in `row'
+        if !missing(`iwpepre_ga_hh`ht'_`yr'') & !missing(`iwpega_hh`ht'_`yr'') {
+            replace Y`yr'_Ch = `iwpega_hh`ht'_`yr'' - `iwpepre_ga_hh`ht'_`yr'' in `row'
+            if `iwpepre_ga_hh`ht'_`yr'' > 0 {
+                replace Y`yr'_ChPct = ((`iwpega_hh`ht'_`yr'' - `iwpepre_ga_hh`ht'_`yr'') / `iwpepre_ga_hh`ht'_`yr'') * 100 in `row'
+            }
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Avg IWP LES==3 Gap Monthly (€)" in `row'
+    foreach yr of local years {
+        replace Y`yr'_pre = `iwpepre_gam_hh`ht'_`yr'' in `row'
+        replace Y`yr'_post = `iwpegam_hh`ht'_`yr'' in `row'
+        if !missing(`iwpepre_gam_hh`ht'_`yr'') & !missing(`iwpegam_hh`ht'_`yr'') {
+            replace Y`yr'_Ch = `iwpegam_hh`ht'_`yr'' - `iwpepre_gam_hh`ht'_`yr'' in `row'
+            if `iwpepre_gam_hh`ht'_`yr'' > 0 {
+                replace Y`yr'_ChPct = ((`iwpegam_hh`ht'_`yr'' - `iwpepre_gam_hh`ht'_`yr'') / `iwpepre_gam_hh`ht'_`yr'') * 100 in `row'
+            }
+        }
+    }
+    local row = `row' + 1
+    
+    replace Variable = "Avg Months Worked (LES==3)" in `row'
+    foreach yr of local years {
+        replace Y`yr'_pre = `monemppre_hh`ht'_`yr'' in `row'
+        replace Y`yr'_post = `monemp_hh`ht'_`yr'' in `row'
+    }
+    local row = `row' + 1
+    
     replace Variable = "" in `row'
     local row = `row' + 1
     
@@ -1859,12 +2495,12 @@ foreach yr of local years {
 capture mkdir "$output"
 export excel "$output/Poverty_HH_PrePost_Combined.xlsx", replace sheet("Combined_PrePost") firstrow(variables)
 
-di as result "Combined file with Pre/Post/Change structure including Sex decomposition saved successfully!"
+di as result "Combined file with Pre/Post/Change structure including Sex decomposition and IWP Employees saved successfully!"
 
 restore
 
 di _n "===============================================================================" 
-di "COMBINED POVERTY ANALYSIS WITH SEX AND HH DECOMPOSITION COMPLETE"
+di "COMBINED POVERTY ANALYSIS WITH SEX, HH DECOMPOSITION AND IWP EMPLOYEES COMPLETE"
 di "Output files:"
 di "  ALL_POV_IND_SILC_PrePost_HH.dta"
 di "  Poverty_HH_PrePost_Combined.xlsx"
