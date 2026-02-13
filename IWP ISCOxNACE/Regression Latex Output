@@ -1,0 +1,78 @@
+*===============================================================================
+* TABLE 1: F-STATISTICS COMPARISON (MACRO-LEVEL) - CORRECTED
+*===============================================================================
+
+* Open file
+file open ftable using "${output}/Table1_FStatistics_Macro.tex", write replace
+
+* Write LaTeX header
+file write ftable "\begin{table}[htbp]" _n
+file write ftable "\centering" _n
+file write ftable "\caption{Macro-Level Analysis: F-Statistics Comparison PRE vs. POST Transfer}" _n
+file write ftable "\label{tab:fstats_macro}" _n
+file write ftable "\begin{tabular}{lcccr}" _n
+file write ftable "\toprule" _n
+file write ftable "Explanatory Level & PRE-Transfer & POST-Transfer & Change & Reduction \\" _n
+file write ftable "\midrule" _n
+
+* Store F-statistics
+est restore skill_pre
+local f_skill_pre = e(F)
+est restore skill_post
+local f_skill_post = e(F)
+
+est restore sector_pre
+local f_sector_pre = e(F)
+est restore sector_post
+local f_sector_post = e(F)
+
+est restore skill_sector_con_pre
+local f_both_pre = e(F)
+est restore skill_sector_cat_post
+local f_both_post = e(F)
+
+est restore skill_inter_sector_pre
+local f_inter_pre = e(F)
+est restore skill_inter_sector_post
+local f_inter_post = e(F)
+
+* Calculate changes
+local skill_change = `f_skill_post' - `f_skill_pre'
+local skill_pct = (`skill_change' / `f_skill_pre') * 100
+
+local sector_change = `f_sector_post' - `f_sector_pre'
+local sector_pct = (`sector_change' / `f_sector_pre') * 100
+
+local both_change = `f_both_post' - `f_both_pre'
+local both_pct = (`both_change' / `f_both_pre') * 100
+
+local inter_change = `f_inter_post' - `f_inter_pre'
+local inter_pct = (`inter_change' / `f_inter_pre') * 100
+
+* Write rows - WITHOUT % in format string
+file write ftable "Skill Level & " %5.2f (`f_skill_pre') "\sym{***} & " %5.2f (`f_skill_post') "\sym{***} & " %6.2f (`skill_change') " & " %5.1f (`skill_pct') "\%" " \\" _n
+
+file write ftable "Sector & " %5.2f (`f_sector_pre') "\sym{***} & " %5.2f (`f_sector_post') "\sym{***} & " %6.2f (`sector_change') " & " %5.1f (`sector_pct') "\%" " \\" _n
+
+file write ftable "\midrule" _n
+
+file write ftable "Both Additive & " %5.2f (`f_both_pre') "\sym{***} & " %5.2f (`f_both_post') "\sym{***} & " %6.2f (`both_change') " & " %5.1f (`both_pct') "\%" " \\" _n
+
+file write ftable "Skill " "\(\times\)" " Sector & " %5.2f (`f_inter_pre') "\sym{***} & " %5.2f (`f_inter_post') "\sym{***} & " %6.2f (`inter_change') " & " %5.1f (`inter_pct') "\%" " \\" _n
+
+* Write footer
+file write ftable "\bottomrule" _n
+file write ftable "\end{tabular}" _n
+file write ftable "\begin{tablenotes}[para,flushleft]" _n
+file write ftable "\small" _n
+file write ftable "\item \textit{Note:} \sym{***} " "\(p<0.001\)" ". All models include year fixed effects and survey weights with PSU clustering. F-statistics test joint significance of skill levels (3 df) or sectors (12 df). Percentage reduction calculated as: " "\((\text{POST} - \text{PRE})/\text{PRE} \times 100\)" ". Negative values indicate that transfers reduce the explanatory power of the respective factor." _n
+file write ftable "\end{tablenotes}" _n
+file write ftable "\end{table}" _n
+
+file close ftable
+
+di _n "{txt}✓ Table 1 saved: ${output}/Table1_FStatistics_Macro.tex"
+
+
+
+
