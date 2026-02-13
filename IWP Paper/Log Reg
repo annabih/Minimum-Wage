@@ -1,0 +1,64 @@
+
+
+
+est clear
+svyset hh_id [pweight = dwt]
+
+* Leere Variable
+gen iwp_vs_arop = .
+
+* 1 = In-work poor
+replace iwp_vs_arop = 1 if inwork_poor_post == 1
+
+* 0 = AROP ohne IWP
+replace iwp_vs_arop = 0 if axi_post == 1 & inwork_poor_post == 0
+label define iwp_lbl 0 "AROP without IWP" 1 "In-work poor"
+label values iwp_vs_arop iwp_lbl
+
+---
+* Odds of Deprivation - IWP vgl. AROP
+---
+svy: logistic dep_clothes i.iwp_vs_arop i.hh_type i.year
+est store odds_clothes
+
+svy: logistic dep_shoes i.iwp_vs_arop i.hh_type i.year 
+est store odds_shoes
+
+svy: logistic dep_social i.iwp_vs_arop i.hh_type i.year 
+est store odds_social
+
+svy: logistic dep_leisure i.iwp_vs_arop i.hh_type i.year 
+est store odds_leisure
+
+svy: logistic dep_pocket i.iwp_vs_arop i.hh_type i.year 
+est store odds_pocket
+
+svy: logistic dep_internet i.iwp_vs_arop i.hh_type i.year
+est store odds_internet
+
+---
+* Odds of Deprivation - IWP vgl. AROP
+---
+svy: logistic i.iwp_vs_arop##i.hh_type i.year
+
+
+---
+* Odds of Deprivation by HH-Decomposition
+---
+est restore odds_clothes
+margins hh_type#iwp_vs_arop, expression(predict()/(1-predict()))
+
+est restore odds_shoes
+margins hh_type#iwp_vs_arop, expression(predict()/(1-predict()))
+
+est restore odds_social
+margins hh_type#iwp_vs_arop, expression(predict()/(1-predict()))
+
+est restore odds_leisure
+margins hh_type, expression(exp(xb())) at(iwp_vs_arop=(0 1))
+
+est restore odds_pocket
+margins hh_type#iwp_vs_arop, expression(predict()/(1-predict()))
+
+est restore odds_internet
+margins hh_type#iwp_vs_arop, expression(predict()/(1-predict()))
