@@ -1,4 +1,4 @@
-*******************************************************************************************************************************************************************************************
+/*******************************************************************************************************************************************************************************************
 *** Titel: Combined Poverty Analysis with Household Decomposition - EU-SILC Austria 2015-2024 - Pre/Post Transfer Extended
 *** Date: 04.02.2026
 *** Aim: Combined AROP and IWP calculation with sex and household-type specific analysis - Pre and Post Transfer with AROP without IWP and IWP Employees (LES==3)
@@ -19,7 +19,7 @@ di _n "=== Original observations: " _N " ===" _n
 *===============================================================================
 di _n "=== Destringing variables ===" _n
 
-local numeric_vars "HX090 HY023 RB050 PB040 RX010 PX010 PL073 PL074 PL075 PL076 year HX040 HX050 RB090 PB150 PL031"
+local numeric_vars "HX090 HY023 RB050 PB040 RX010 PX010 PL073 PL074 PL075 PL076 year HX040 HX050 RB090 PB150 PL040 PL040A"
 
 foreach var of local numeric_vars {
     capture confirm variable `var'
@@ -84,17 +84,33 @@ label define sex_lbl 1 "Male" 2 "Female"
 label values sex sex_lbl
 label variable sex "Sex"
 
-* Labour Economic Status (LES) - PL031
-capture confirm variable PL031
+* Labour Economic Status (LES) - PL040 (2015-2020) and PL040A (2021-2024)
+* Create unified les variable from both sources
+gen les = .
+label variable les "Labour Economic Status (PL040/PL040A)"
+
+* Use PL040 for years 2015-2020
+capture confirm variable PL040
 if _rc == 0 {
-    gen les = PL031
-    label variable les "Labour Economic Status (PL031)"
-    di "LES variable (PL031) found and created"
-    tab les, missing
+    replace les = PL040 if year >= 2015 & year <= 2020
+    di "LES from PL040 used for years 2015-2020"
+}
+
+* Use PL040A for years 2021-2024
+capture confirm variable PL040A
+if _rc == 0 {
+    replace les = PL040A if year >= 2021 & year <= 2024
+    di "LES from PL040A used for years 2021-2024"
+}
+
+* Check if les is populated
+quietly count if !missing(les)
+if r(N) > 0 {
+    di "LES variable successfully created"
+    tab les year, missing
 }
 else {
-    di as error "LES variable (PL031) not found - IWP Employees analysis not possible"
-    gen les = .
+    di as error "Warning: LES variable is empty - check PL040/PL040A availability"
 }
 
 * Months worked - ALL work (employee + self-employed)
@@ -613,6 +629,7 @@ foreach yr of local years {
         local iwrpp_`yr' = .
         local iwrpc_`yr' = .
         local niwlift_`yr' = .
+        local moniwpre_`yr' = .
     }
 
     * AROP without IWP post
@@ -779,6 +796,7 @@ foreach yr of local years {
         local iwperpp_`yr' = .
         local iwperpc_`yr' = .
         local niwpelift_`yr' = .
+        local monemppre_`yr' = .
     }
 
     * Shared
@@ -839,6 +857,7 @@ foreach yr of local years {
             local iwpre_ga_sx`sx'_`yr' = .
             local iwpre_gam_sx`sx'_`yr' = .
             local mon_sx`sx'_`yr' = .
+            local moniwpre_sx`sx'_`yr' = .
             local axi_sx`sx'_`yr' = .
             local axipre_sx`sx'_`yr' = .
             local naxi_sx`sx'_`yr' = .
@@ -847,6 +866,8 @@ foreach yr of local years {
             local axigam_sx`sx'_`yr' = .
             local axipre_ga_sx`sx'_`yr' = .
             local axipre_gam_sx`sx'_`yr' = .
+            local monaxi_sx`sx'_`yr' = .
+            local monaxipre_sx`sx'_`yr' = .
             local iwpe_sx`sx'_`yr' = .
             local iwpepre_sx`sx'_`yr' = .
             local nemp_sx`sx'_`yr' = .
@@ -857,6 +878,7 @@ foreach yr of local years {
             local iwpepre_ga_sx`sx'_`yr' = .
             local iwpepre_gam_sx`sx'_`yr' = .
             local monemp_sx`sx'_`yr' = .
+            local monemppre_sx`sx'_`yr' = .
             continue
         }
         
@@ -976,6 +998,7 @@ foreach yr of local years {
             local niwpre_sx`sx'_`yr' = .
             local iwpre_ga_sx`sx'_`yr' = .
             local iwpre_gam_sx`sx'_`yr' = .
+            local moniwpre_sx`sx'_`yr' = .
         }
         
         * AROP without IWP post
@@ -1094,6 +1117,7 @@ foreach yr of local years {
             local niwpepre_sx`sx'_`yr' = .
             local iwpepre_ga_sx`sx'_`yr' = .
             local iwpepre_gam_sx`sx'_`yr' = .
+            local monemppre_sx`sx'_`yr' = .
         }
     }
     
@@ -1193,6 +1217,7 @@ foreach yr of local years {
             local iwga_hh`ht'_`yr' = .
             local iwgam_hh`ht'_`yr' = .
             local mon_hh`ht'_`yr' = .
+            local moniwpre_hh`ht'_`yr' = .
             local pl_hh`ht'_`yr' = .
             local plm_hh`ht'_`yr' = .
             local axi_hh`ht'_`yr' = .
@@ -1207,6 +1232,8 @@ foreach yr of local years {
             local axigam_hh`ht'_`yr' = .
             local axipre_ga_hh`ht'_`yr' = .
             local axipre_gam_hh`ht'_`yr' = .
+            local monaxi_hh`ht'_`yr' = .
+            local monaxipre_hh`ht'_`yr' = .
             local iwpe_hh`ht'_`yr' = .
             local iwpepre_hh`ht'_`yr' = .
             local iwperpp_hh`ht'_`yr' = .
@@ -1221,6 +1248,7 @@ foreach yr of local years {
             local iwpepre_ga_hh`ht'_`yr' = .
             local iwpepre_gam_hh`ht'_`yr' = .
             local monemp_hh`ht'_`yr' = .
+            local monemppre_hh`ht'_`yr' = .
             continue
         }
         
@@ -1394,6 +1422,7 @@ foreach yr of local years {
             local iwrpc_hh`ht'_`yr' = .
             local iwpre_ga_hh`ht'_`yr' = .
             local iwpre_gam_hh`ht'_`yr' = .
+            local moniwpre_hh`ht'_`yr' = .
         }
         
         * AROP without IWP post
@@ -1561,6 +1590,7 @@ foreach yr of local years {
             local iwperpc_hh`ht'_`yr' = .
             local iwpepre_ga_hh`ht'_`yr' = .
             local iwpepre_gam_hh`ht'_`yr' = .
+            local monemppre_hh`ht'_`yr' = .
         }
         
         sum pov_hh if year == `yr' & hh_type == `ht', meanonly
