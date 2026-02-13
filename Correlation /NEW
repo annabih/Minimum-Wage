@@ -965,12 +965,15 @@ est replay skill_sector_con_pre
 
 * Durchschnittliche Margins Vergleichen 
 est restore skill_sector_con_pre
-margins, dydx(skill_level) atmeans
-margins, dydx(nace_sector) atmeans
+margins, dydx(skill_level)
+margins, dydx(nace_sector)
 
 * Predicted Probabilities für typische Profile
 margins, at(skill_level=(1 2 3 4) nace_sector=1)
 marginsplot
+
+
+
 
 
 
